@@ -8,6 +8,7 @@ locals {
   }
 }
 
+
 # -------------------------
 # S3 Data Lake (Free Tier)
 # -------------------------
@@ -17,6 +18,7 @@ resource "aws_s3_bucket" "data_lake" {
   tags          = merge(local.common_tags, { Component = "data-lake" })
 }
 
+
 resource "aws_s3_bucket_public_access_block" "data_lake" {
   bucket = aws_s3_bucket.data_lake.id
 
@@ -25,6 +27,7 @@ resource "aws_s3_bucket_public_access_block" "data_lake" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
+
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "data_lake" {
   bucket = aws_s3_bucket.data_lake.id
@@ -36,6 +39,7 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "data_lake" {
   }
 }
 
+
 resource "aws_s3_bucket_versioning" "data_lake" {
   bucket = aws_s3_bucket.data_lake.id
 
@@ -43,6 +47,7 @@ resource "aws_s3_bucket_versioning" "data_lake" {
     status = "Suspended" # Desabilita versionamento para economizar
   }
 }
+
 
 resource "aws_s3_bucket_lifecycle_configuration" "data_lake" {
   bucket = aws_s3_bucket.data_lake.id
@@ -52,20 +57,19 @@ resource "aws_s3_bucket_lifecycle_configuration" "data_lake" {
     status = "Enabled"
 
     expiration {
-      days = var.lifecycle_days # Objetos expirados apos 30 dias (Free Tier)
+      days                         = var.lifecycle_days
     }
 
     noncurrent_version_expiration {
-      noncurrent_days = 7 # Versoes antigas removidas em 7 dias
+      noncurrent_days = 7
     }
 
     abort_incomplete_multipart_upload {
       days_after_initiation = 7
     }
-
-    expired_object_delete_marker = true
   }
 }
+
 
 # -------------------------
 # IAM User & Policy minimos
@@ -75,9 +79,11 @@ resource "aws_iam_user" "etl_user" {
   tags = merge(local.common_tags, { Component = "iam" })
 }
 
+
 resource "aws_iam_access_key" "etl_user_key" {
   user = aws_iam_user.etl_user.name
 }
+
 
 data "aws_iam_policy_document" "etl_policy" {
   statement {
@@ -115,11 +121,13 @@ data "aws_iam_policy_document" "etl_policy" {
   }
 }
 
+
 resource "aws_iam_user_policy" "etl_user_policy" {
   name   = "${var.project_name}-policy"
   user   = aws_iam_user.etl_user.name
   policy = data.aws_iam_policy_document.etl_policy.json
 }
+
 
 # -------------------------
 # RDS Postgres (Free Tier)

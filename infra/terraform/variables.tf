@@ -67,7 +67,7 @@ variable "db_port" {
 variable "db_engine_version" {
   description = "Versão do Postgres (14.x elegível Free Tier)"
   type        = string
-  default     = "14.11"
+  default     = "14.13"
 }
 
 variable "db_instance_class" {
