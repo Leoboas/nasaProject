@@ -1,0 +1,33 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+
+# Airflow
+airflow/logs/
+airflow/airflow.db
+
+# Environment
+.env
+.env.*
+
+# Data & notebooks
+data/processed/
+*.ipynb_checkpoints
+
+# Docker
+*.pid
+*.log
+
+# Terraform
+infra/terraform/.terraform/
+infra/terraform/.terraform.lock.hcl
+infra/terraform/terraform.tfstate
+infra/terraform/terraform.tfstate.backup
+infra/terraform/terraform.tfvars
+terraform_outputs.json
+
+# OS
+.DS_Store
+Thumbs.db

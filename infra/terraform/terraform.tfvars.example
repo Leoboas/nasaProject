@@ -1,0 +1,15 @@
+aws_region   = "us-east-1"
+project_name = "nasa-etl-demo"
+bucket_name  = "nasa-etl-demo"
+
+# Credenciais e alertas
+db_password = "SuaSenhaSegura123!"
+alert_email = "seu_email@exemplo.com"
+
+# Opcional: overrides
+# db_instance_class = "db.t3.micro"
+# db_allocated_storage = 20
+# s3_storage_threshold_gb = 4.5
+# s3_put_requests_threshold = 1800
+# rds_free_storage_threshold_gb = 2
+# budget_limit = 1.0
