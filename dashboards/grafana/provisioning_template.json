@@ -1,0 +1,23 @@
+{
+  "dashboard": {
+    "title": "NASA NEO Overview",
+    "tags": ["nasa", "neo"],
+    "timezone": "browser",
+    "panels": [
+      {
+        "type": "stat",
+        "title": "Total Asteroides",
+        "id": 1,
+        "datasource": null,
+        "targets": []
+      },
+      {
+        "type": "stat",
+        "title": "Potencialmente perigosos",
+        "id": 2,
+        "datasource": null,
+        "targets": []
+      }
+    ]
+  }
+}
