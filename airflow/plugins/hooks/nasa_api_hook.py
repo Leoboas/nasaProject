@@ -6,6 +6,7 @@ from typing import Any
 
 from airflow.hooks.base import BaseHook
 from airflow.providers.http.hooks.http import HttpHook
+from airflow.exceptions import AirflowException
 
 from etl.common.config import nasa_config
 
@@ -29,9 +30,12 @@ class NASAApiHook(BaseHook):
             "end_date": end.isoformat(),
             "api_key": nasa_config.api_key,
         }
-        resp = self.http_hook.run(
-            endpoint=nasa_config.resource,
-            data=params,
-        )
-        resp.raise_for_status()
+        try:
+            resp = self.http_hook.run(
+                endpoint=nasa_config.resource,
+                data=params,
+            )
+            resp.raise_for_status()
+        except Exception as exc:
+            raise AirflowException(f"Falha ao consultar NASA API: {exc}") from exc
         return json.loads(resp.text)

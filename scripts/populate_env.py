@@ -28,7 +28,24 @@ def write_env(env: Dict[str, str]) -> None:
 
 
 def load_outputs(path: Path) -> Dict[str, str]:
-    data = json.loads(path.read_text())
+    raw_bytes = path.read_bytes()
+    if not raw_bytes.strip():
+        raise ValueError(
+            f"Arquivo {path} está vazio. Recrie com `terraform output -json > ../terraform_outputs.json`."
+        )
+
+    # Detecta BOM UTF-16 gerada pelo terraform no Windows e decodifica corretamente.
+    if raw_bytes.startswith(b"\xff\xfe") or raw_bytes.startswith(b"\xfe\xff"):
+        raw = raw_bytes.decode("utf-16")
+    else:
+        raw = raw_bytes.decode("utf-8-sig")
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Arquivo {path} não é um JSON válido. Recrie com `terraform output -json > ../terraform_outputs.json`. Erro: {exc}"
+        ) from exc
     outputs = {}
     for key, value in data.items():
         outputs[key] = value.get("value")

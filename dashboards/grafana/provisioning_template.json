@@ -1,22 +1,92 @@
 {
   "dashboard": {
-    "title": "NASA NEO Overview",
-    "tags": ["nasa", "neo"],
+    "title": "Monitoria Asteroides - NASA NEO",
+    "tags": ["nasa", "neo", "monitoria", "atlas", "3i"],
     "timezone": "browser",
     "panels": [
       {
         "type": "stat",
-        "title": "Total Asteroides",
+        "title": "Total eventos monitoria",
         "id": 1,
         "datasource": null,
-        "targets": []
+        "targets": [
+          {
+            "rawSql": "SELECT count(*) FROM asteroides_monitoria",
+            "format": "table"
+          }
+        ]
       },
       {
         "type": "stat",
-        "title": "Potencialmente perigosos",
+        "title": "Eventos Hazard (90d)",
         "id": 2,
         "datasource": null,
-        "targets": []
+        "targets": [
+          {
+            "rawSql": "SELECT count(*) FROM asteroides_monitoria WHERE is_potentially_hazardous_asteroid = true AND close_approach_date >= CURRENT_DATE - INTERVAL '90 days'",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "type": "table",
+        "title": "Asteroides de alerta",
+        "id": 3,
+        "datasource": null,
+        "targets": [
+          {
+            "rawSql": "SELECT close_approach_date, name, alert_tag, miss_distance_km, absolute_magnitude_h, relative_velocity_km_s FROM asteroides_monitoria ORDER BY close_approach_date DESC LIMIT 100",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "type": "graph",
+        "title": "Proximidade vs Magnitude",
+        "id": 4,
+        "datasource": null,
+        "targets": [
+          {
+            "rawSql": "SELECT extract(epoch from close_approach_date) as time, miss_distance_km, absolute_magnitude_h FROM asteroides_monitoria WHERE close_approach_date >= CURRENT_DATE - INTERVAL '90 days'",
+            "format": "time_series"
+          }
+        ]
+      },
+      {
+        "type": "graph",
+        "title": "Eventos por dia (últimos 30d)",
+        "id": 5,
+        "datasource": null,
+        "targets": [
+          {
+            "rawSql": "SELECT close_approach_date as time, count(*) as eventos FROM asteroides_monitoria WHERE close_approach_date >= CURRENT_DATE - INTERVAL '30 days' GROUP BY close_approach_date ORDER BY close_approach_date",
+            "format": "time_series"
+          }
+        ]
+      },
+      {
+        "type": "table",
+        "title": "Filtro Atlas e 3I",
+        "id": 6,
+        "datasource": null,
+        "targets": [
+          {
+            "rawSql": "SELECT close_approach_date, name, alert_tag, miss_distance_km, details_json FROM asteroides_monitoria WHERE alert_tag LIKE '%atlas%' OR alert_tag LIKE '%3i%' ORDER BY close_approach_date DESC LIMIT 50",
+            "format": "table"
+          }
+        ]
+      },
+      {
+        "type": "stat",
+        "title": "Interestelares (3I) 90d",
+        "id": 7,
+        "datasource": null,
+        "targets": [
+          {
+            "rawSql": "SELECT count(*) FROM asteroides_monitoria WHERE lower(alert_tag) LIKE '%3i%' AND close_approach_date >= CURRENT_DATE - INTERVAL '90 days'",
+            "format": "table"
+          }
+        ]
       }
     ]
   }

@@ -8,7 +8,7 @@ from airflow.models import BaseOperator
 from airflow.utils.context import Context
 
 from etl.common.logging_config import get_logger
-from etl.transform.asteroid_transform import normalize_neo_feed
+from etl.transform.asteroid_transform import normalize_neo_feed, filter_alerts
 
 logger = get_logger(__name__)
 
@@ -21,7 +21,7 @@ class NASATransformOperator(BaseOperator):
     def __init__(
         self,
         input_path: str,
-        output_path: str = "/opt/airflow/data/processed/neo_{{ ds }}.csv",
+        output_path: str = "/opt/airflow/data/processed/neo_alertas_{{ ds }}.csv",
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
@@ -35,6 +35,12 @@ class NASATransformOperator(BaseOperator):
 
         raw = json.loads(in_path.read_text())
         df = normalize_neo_feed(raw)
-        df.to_csv(out_path, index=False)
-        logger.info("Transformacao concluida: %s linhas -> %s", len(df), out_path)
+        filtered = filter_alerts(df)
+        filtered.to_csv(out_path, index=False)
+        logger.info(
+            "Transformacao concluida: %s linhas totais, %s alertas -> %s",
+            len(df),
+            len(filtered),
+            out_path,
+        )
         return str(out_path)
