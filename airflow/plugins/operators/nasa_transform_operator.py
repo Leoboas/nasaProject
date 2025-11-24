@@ -36,5 +36,5 @@ class NASATransformOperator(BaseOperator):
         raw = json.loads(in_path.read_text())
         df = normalize_neo_feed(raw)
         df.to_csv(out_path, index=False)
-        logger.info("Transformação concluída: %s linhas -> %s", len(df), out_path)
+        logger.info("Transformacao concluida: %s linhas -> %s", len(df), out_path)
         return str(out_path)

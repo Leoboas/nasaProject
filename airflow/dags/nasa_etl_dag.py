@@ -6,9 +6,9 @@ from airflow import DAG
 from airflow.models.baseoperator import chain
 from airflow.utils.dates import days_ago
 
-from airflow.plugins.operators.nasa_extract_operator import NASAExtractOperator
-from airflow.plugins.operators.nasa_transform_operator import NASATransformOperator
-from airflow.plugins.operators.nasa_load_operator import NASALoadOperator
+from plugins.operators.nasa_extract_operator import NASAExtractOperator
+from plugins.operators.nasa_transform_operator import NASATransformOperator
+from plugins.operators.nasa_load_operator import NASALoadOperator
 
 DEFAULT_ARGS = {
     "owner": "data-engineering",

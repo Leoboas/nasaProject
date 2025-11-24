@@ -10,7 +10,7 @@ from airflow.models import BaseOperator
 from airflow.utils.context import Context
 
 from etl.common.logging_config import get_logger
-from airflow.plugins.hooks.nasa_api_hook import NASAApiHook
+from plugins.hooks.nasa_api_hook import NASAApiHook
 
 logger = get_logger(__name__)
 
