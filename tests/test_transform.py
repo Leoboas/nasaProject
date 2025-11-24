@@ -30,5 +30,5 @@ def test_normalize_neo_feed():
         }
     }
     df = normalize_neo_feed(raw)
-    assert list(df.columns) == ASTEROID_COLUMNS
+    assert list(df.columns) == ASTEROID_COLUMNS + ["raw"]
     assert len(df) == 1
