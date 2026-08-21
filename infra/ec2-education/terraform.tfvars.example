@@ -1,0 +1,12 @@
+aws_region          = "us-east-2"
+project_name        = "nasa-etl"
+environment         = "education"
+ami_id              = "ami-REPLACE_WITH_UBUNTU_AMI_IN_US_EAST_2"
+subnet_id           = "subnet-REPLACE_WITH_EXISTING_SUBNET"
+security_group_id   = "sg-REPLACE_WITH_EXISTING_SECURITY_GROUP"
+key_pair_name       = "nasa-key"
+instance_profile_name = null
+instance_type       = "t3.micro"
+root_volume_gb      = 12
+repository_url      = "https://github.com/Leoboas/nasaProject.git"
+repository_ref      = "v1.0.0"
