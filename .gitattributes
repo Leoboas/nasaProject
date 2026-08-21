@@ -1,0 +1,14 @@
+# Mantém arquivos executados em Linux/Docker com quebras de linha portáveis.
+*.py text eol=lf
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.tf text eol=lf
+*.md text eol=lf
+*.sql text eol=lf
+Dockerfile text eol=lf
+Dockerfile.runtime text eol=lf
+requirements*.txt text eol=lf
+.env.example text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf

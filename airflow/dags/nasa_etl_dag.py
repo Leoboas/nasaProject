@@ -21,7 +21,7 @@ DEFAULT_ARGS = {
 }
 
 
-def check_env_and_api(**context):
+def check_env_and_api() -> bool:
     """Valida variaveis obrigatorias e conecta na NASA API para healthcheck."""
     required = ["NASA_API_KEY"]
     missing = [var for var in required if not os.getenv(var)]

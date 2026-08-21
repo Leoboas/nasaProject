@@ -1,17 +1,15 @@
-import os
-
-import pytest
 import pandas as pd
+import pytest
 
-from etl.load.postgres_loader import PostgresLoader
+from etl.load.postgres_loader import MONITORING_TABLE, PostgresLoader
 
 
-@pytest.mark.skipif(
-    os.getenv("RUN_POSTGRES_INTEGRATION") != "1",
-    reason="Defina RUN_POSTGRES_INTEGRATION=1 para executar contra um PostgreSQL isolado.",
-)
-def test_loader_with_empty_df():
-    loader = PostgresLoader(table_name="neo_asteroids_test")
-    df = pd.DataFrame()
-    count = loader.load_dataframe(df)
-    assert count == 0
+def test_loader_rejects_legacy_table_before_connecting() -> None:
+    with pytest.raises(ValueError, match="asteroides_monitoria"):
+        PostgresLoader(table_name="neo_asteroids")
+
+
+def test_loader_returns_zero_for_empty_dataframe_without_connection() -> None:
+    loader = PostgresLoader.__new__(PostgresLoader)
+    loader.table_name = MONITORING_TABLE
+    assert loader.load_dataframe(pd.DataFrame()) == 0

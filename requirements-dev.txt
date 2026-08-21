@@ -1,14 +1,6 @@
+# Ambiente de desenvolvimento/testes do ETL. Não é usado pelo Streamlit Cloud.
+-r requirements.runtime.txt
 apache-airflow==2.9.0
-apache-airflow-providers-amazon==8.19.0
 apache-airflow-providers-http==4.10.0
-apache-airflow-providers-postgres==5.10.2
-requests==2.31.0
-pandas==2.1.4
-psycopg2-binary==2.9.9
-python-dotenv==1.0.1
-pytest==7.4.4
-pytest-mock==3.14.0
-sqlalchemy==1.4.52
 pendulum==3.0.0
-streamlit>=1.36,<2
-plotly>=5.22,<7
+pytest==7.4.4

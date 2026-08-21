@@ -21,8 +21,6 @@ apt-get install -y --no-install-recommends \
   curl \
   git \
   gnupg \
-  nodejs \
-  npm \
   python3 \
   python3-pip \
   python3-venv

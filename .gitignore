@@ -6,9 +6,10 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 
-# Airflow
+# Airflow e Streamlit
 airflow/logs/
 airflow/airflow.db
+.streamlit/secrets.toml
 
 # Segredos e certificados
 .env
@@ -31,11 +32,13 @@ data/samples/neo_raw_*.json
 *.pid
 *.log
 
-# Terraform: state, variáveis e outputs podem conter segredos.
+# Terraform: state, variáveis, planos e outputs podem conter segredos.
 **/.terraform/
 *.tfstate
 *.tfstate.*
 *.tfvars
+tfplan
+*.tfplan
 terraform_outputs.json
 
 # Sistema operacional e editor

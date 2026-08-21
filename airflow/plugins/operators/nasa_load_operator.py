@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
-
 import pandas as pd
 from airflow.models import BaseOperator
 from airflow.utils.context import Context
 
+from pathlib import Path
+from typing import Any
+
 from etl.common.logging_config import get_logger
-from etl.load.postgres_loader import PostgresLoader
+from etl.load.postgres_loader import MONITORING_TABLE, PostgresLoader
 
 logger = get_logger(__name__)
 
@@ -18,7 +18,7 @@ class NASALoadOperator(BaseOperator):
 
     template_fields = ("input_path",)
 
-    def __init__(self, input_path: str, table_name: str = "neo_asteroids", **kwargs: Any) -> None:
+    def __init__(self, input_path: str, table_name: str = MONITORING_TABLE, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self.input_path = input_path
         self.table_name = table_name

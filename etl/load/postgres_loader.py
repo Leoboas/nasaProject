@@ -1,62 +1,39 @@
-import pandas as pd
-from sqlalchemy import create_engine
-from sqlalchemy import text
+from __future__ import annotations
 
-from etl.common.config import pg_config
+import pandas as pd
+from sqlalchemy import create_engine, text
+from sqlalchemy.engine import Engine
+
+from etl.common.config import get_postgres_config
 from etl.common.logging_config import get_logger
 
+
 logger = get_logger(__name__)
+MONITORING_TABLE = "asteroides_monitoria"
 
 
 class PostgresLoader:
-    """Loader simples para Postgres usando SQLAlchemy."""
+    """Persiste alertas monitorados com UPSERT idempotente no PostgreSQL."""
 
-    def __init__(self, table_name: str = "neo_asteroids", if_exists: str = "append"):
+    def __init__(self, table_name: str = MONITORING_TABLE) -> None:
+        if table_name != MONITORING_TABLE:
+            raise ValueError(f"A tabela suportada é somente {MONITORING_TABLE!r}.")
+
         self.table_name = table_name
-        self.if_exists = if_exists
-        self.engine = create_engine(pg_config.sql_alchemy_uri)
-        self._ensure_table()
+        self.engine: Engine = create_engine(
+            get_postgres_config().sqlalchemy_url,
+            pool_pre_ping=True,
+            pool_recycle=300,
+        )
 
-    def _ensure_table(self):
-        if self.table_name != "asteroides_monitoria":
-            return
-        ddl = """
-        CREATE TABLE IF NOT EXISTS asteroides_monitoria (
-            id TEXT NOT NULL,
-            name TEXT,
-            close_approach_date DATE,
-            absolute_magnitude_h DOUBLE PRECISION,
-            relative_velocity_km_s DOUBLE PRECISION,
-            miss_distance_km DOUBLE PRECISION,
-            alert_tag TEXT,
-            is_potentially_hazardous_asteroid BOOLEAN,
-            details_json JSONB,
-            created_at TIMESTAMP DEFAULT NOW(),
-            PRIMARY KEY (id, close_approach_date)
-        );
-        """
-        cleanup = """
-        DELETE FROM asteroides_monitoria
-        WHERE close_approach_date < CURRENT_DATE - INTERVAL '90 days';
-        """
-        with self.engine.begin() as conn:
-            conn.execute(text(ddl))
-            conn.execute(text(cleanup))
-
-    def load_dataframe(self, df: pd.DataFrame) -> int:
-        if df.empty:
-            logger.warning("DataFrame vazio; nada a carregar.")
+    def load_dataframe(self, dataframe: pd.DataFrame) -> int:
+        if dataframe.empty:
+            logger.info("DataFrame vazio; nada a carregar.")
             return 0
-        logger.info("Carregando %s registros em %s", len(df), self.table_name)
-        if self.table_name == "asteroides_monitoria":
-            return self._upsert_monitoria(df)
-        df.to_sql(self.table_name, self.engine, if_exists=self.if_exists, index=False)
-        return len(df)
 
-    def _upsert_monitoria(self, df: pd.DataFrame) -> int:
-        # upsert baseado em (id, close_approach_date)
-        rows = df.to_dict(orient="records")
-        stmt = text(
+        logger.info("Carregando %s registros em %s", len(dataframe), self.table_name)
+        rows = dataframe.to_dict(orient="records")
+        statement = text(
             """
             INSERT INTO asteroides_monitoria (
                 id, name, close_approach_date, absolute_magnitude_h,
@@ -79,6 +56,6 @@ class PostgresLoader:
                 details_json = EXCLUDED.details_json
             """
         )
-        with self.engine.begin() as conn:
-            conn.execute(stmt, rows)
-        return len(df)
+        with self.engine.begin() as connection:
+            connection.execute(statement, rows)
+        return len(dataframe)

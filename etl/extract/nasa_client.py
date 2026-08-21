@@ -1,29 +1,39 @@
+from __future__ import annotations
+
 import datetime as dt
+from typing import Any
+
 import requests
 
-from etl.common.config import nasa_config
+from etl.common.config import get_nasa_config
 from etl.common.logging_config import get_logger
+
 
 logger = get_logger(__name__)
 
 
 class NASAClient:
-    """Cliente simples para NASA NEO Feed."""
+    """Cliente HTTP para o endpoint NASA NeoWS Feed."""
 
-    def __init__(self, api_key: str | None = None):
-        self.api_key = api_key or nasa_config.api_key
-        self.base_url = nasa_config.base_url
-        self.resource = nasa_config.resource
+    def __init__(
+        self,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        resource: str | None = None,
+    ) -> None:
+        config = get_nasa_config()
+        self.api_key = api_key or config.api_key
+        self.base_url = (base_url or config.base_url).rstrip("/")
+        self.resource = (resource or config.resource).lstrip("/")
 
-    def fetch_neo_feed(self, start_date: dt.date, end_date: dt.date | None = None) -> dict:
+    def fetch_neo_feed(self, start_date: dt.date, end_date: dt.date | None = None) -> dict[str, Any]:
         end = end_date or start_date
-        url = f"{self.base_url}/{self.resource}"
         params = {
             "start_date": start_date.isoformat(),
             "end_date": end.isoformat(),
             "api_key": self.api_key,
         }
         logger.info("Consultando NASA NEO Feed %s - %s", params["start_date"], params["end_date"])
-        resp = requests.get(url, params=params, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        response = requests.get(f"{self.base_url}/{self.resource}", params=params, timeout=30)
+        response.raise_for_status()
+        return response.json()

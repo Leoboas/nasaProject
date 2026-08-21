@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+from airflow.exceptions import AirflowException
+from airflow.hooks.base import BaseHook
+from airflow.providers.http.hooks.http import HttpHook
+
 import datetime as dt
 import json
 from typing import Any
 
-from airflow.hooks.base import BaseHook
-from airflow.providers.http.hooks.http import HttpHook
-from airflow.exceptions import AirflowException
-
-from etl.common.config import nasa_config
+from etl.common.config import get_nasa_config
 
 
 class NASAApiHook(BaseHook):
@@ -24,15 +24,16 @@ class NASAApiHook(BaseHook):
         self.http_hook = HttpHook(method="GET", http_conn_id=self.http_conn_id)
 
     def get_neo_feed(self, start_date: dt.date, end_date: dt.date | None = None) -> dict[str, Any]:
+        config = get_nasa_config()
         end = end_date or start_date
         params = {
             "start_date": start_date.isoformat(),
             "end_date": end.isoformat(),
-            "api_key": nasa_config.api_key,
+            "api_key": config.api_key,
         }
         try:
             resp = self.http_hook.run(
-                endpoint=nasa_config.resource,
+                endpoint=config.resource,
                 data=params,
             )
             resp.raise_for_status()
