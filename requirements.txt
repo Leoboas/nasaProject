@@ -12,3 +12,5 @@ pytest==7.4.4
 pytest-mock==3.14.0
 sqlalchemy==1.4.52
 pendulum==3.0.0
+streamlit>=1.36,<2
+plotly>=5.22,<7
