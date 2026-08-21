@@ -9,7 +9,7 @@ data "aws_subnets" "default" {
   }
 }
 
-# Subnet group usando subnets do VPC default (dev/Free Tier)
+# Subnet group usando subnets do VPC default. O RDS continua privado.
 resource "aws_db_subnet_group" "default" {
   name       = "${var.project_name}-subnets"
   subnet_ids = data.aws_subnets.default.ids
@@ -17,18 +17,36 @@ resource "aws_db_subnet_group" "default" {
   tags = merge(local.common_tags, { Component = "rds-subnet-group" })
 }
 
-# Security Group liberando porta 5432 (dev). Restrinja ao seu IP em prod.
+# Não existe regra pública. Libere somente Security Groups de workloads
+# autorizados (por exemplo, o output security_group_id de infra/ec2).
 resource "aws_security_group" "rds" {
   name        = "${var.project_name}-rds-sg"
-  description = "Acesso ao Postgres RDS (porta 5432) - ambiente dev"
+  description = "Private PostgreSQL access for approved clients"
   vpc_id      = data.aws_vpc.default.id
 
-  ingress {
-    description = "Postgres"
-    from_port   = 5432
-    to_port     = 5432
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
+  dynamic "ingress" {
+    for_each = var.rds_client_security_group_ids
+
+    content {
+      description     = "PostgreSQL from approved workload SG"
+      from_port       = 5432
+      to_port         = 5432
+      protocol        = "tcp"
+      security_groups = [ingress.value]
+    }
+  }
+
+  # Use somente para migração/debug controlado; prefira o SG acima.
+  dynamic "ingress" {
+    for_each = var.rds_admin_cidrs
+
+    content {
+      description = "Temporary PostgreSQL admin access"
+      from_port   = 5432
+      to_port     = 5432
+      protocol    = "tcp"
+      cidr_blocks = [ingress.value]
+    }
   }
 
   egress {

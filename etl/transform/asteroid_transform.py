@@ -1,3 +1,5 @@
+import json
+
 import pandas as pd
 
 from etl.common.schemas import ASTEROID_COLUMNS
@@ -72,7 +74,11 @@ def filter_alerts(df: pd.DataFrame) -> pd.DataFrame:
         return ",".join(tags) if tags else "other"
 
     filtered["alert_tag"] = filtered.apply(_tag, axis=1)
-    filtered["details_json"] = filtered["raw"].apply(lambda x: pd.io.json.dumps(x))
+    # Mantém o payload original para auditoria sem depender de APIs internas
+    # do pandas (pd.io.json.dumps foi removido em versões recentes).
+    filtered["details_json"] = filtered["raw"].apply(
+        lambda value: json.dumps(value, ensure_ascii=False, default=str)
+    )
     keep_cols = [
         "id",
         "name",

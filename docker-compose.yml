@@ -1,84 +1,170 @@
-﻿version: "3.9"
+name: nasa-etl
+
+x-default-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-airflow-environment: &airflow-environment
+  TZ: ${TZ:-America/Manaus}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  PYTHONPATH: /opt/airflow:/opt/airflow/plugins
+  NASA_API_KEY: ${NASA_API_KEY:?defina NASA_API_KEY no .env}
+  NASA_API_BASE: ${NASA_API_BASE:-https://api.nasa.gov}
+  NASA_API_RESOURCE: ${NASA_API_RESOURCE:-neo/rest/v1/feed}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB no .env}
+  POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER no .env}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+  DATA_DIR: /opt/airflow/data
+  DATA_RETENTION_DAYS: ${DATA_RETENTION_DAYS:-90}
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?defina AIRFLOW_FERNET_KEY no .env}
+  AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY:?defina AIRFLOW_WEBSERVER_SECRET_KEY no .env}
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
 
 x-airflow-common: &airflow-common
-  image: apache/airflow:2.7.3
-  env_file:
-    - .env
-  environment:
-    AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__CORE__FERNET_KEY: ""
-    AIRFLOW__CORE__LOAD_EXAMPLES: "false"
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-    PYTHONPATH: /opt/airflow:/opt/airflow/plugins
+  build:
+    context: .
+    dockerfile: Dockerfile
+  image: nasa-etl-airflow:2.9.0
+  environment: *airflow-environment
   volumes:
-    - ./airflow/dags:/opt/airflow/dags
-    - ./airflow/plugins:/opt/airflow/plugins
-    - ./airflow/logs:/opt/airflow/logs
-    - ./etl:/opt/airflow/etl
-    - ./data:/opt/airflow/data
-  user: "${AIRFLOW_UID}:${AIRFLOW_GID}"
-  depends_on:
-    postgres:
-      condition: service_healthy
+    - airflow_logs:/opt/airflow/logs
+    - airflow_data:/opt/airflow/data
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging: *default-logging
 
 services:
   postgres:
-    image: postgres:15
+    image: postgres:15-alpine
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "${POSTGRES_USER}"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER no .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB no .env}
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./db/migrations/0001_init.sql:/docker-entrypoint-initdb.d/0001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
 
   airflow-init:
     <<: *airflow-common
-    entrypoint: /bin/bash
+    restart: "no"
+    environment:
+      <<: *airflow-environment
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:?defina AIRFLOW_ADMIN_USER no .env}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?defina AIRFLOW_ADMIN_PASSWORD no .env}
+      AIRFLOW_ADMIN_EMAIL: ${AIRFLOW_ADMIN_EMAIL:?defina AIRFLOW_ADMIN_EMAIL no .env}
+    depends_on:
+      postgres:
+        condition: service_healthy
     command:
-      - -c
+      - bash
+      - -ec
       - |
-        airflow db init
-        airflow users create \
-          --username admin \
-          --password admin \
-          --firstname Air \
-          --lastname Flow \
-          --role Admin \
-          --email admin@example.com
+        airflow db migrate
+        airflow connections get nasa_api >/dev/null 2>&1 || \
+          airflow connections add nasa_api --conn-type http --conn-host api.nasa.gov --conn-schema https
+        if ! airflow users list --output json | python -c 'import json, sys; username = sys.argv[1]; users = json.load(sys.stdin); raise SystemExit(0 if any(user["username"] == username for user in users) else 1)' "$${AIRFLOW_ADMIN_USER}"; then
+          airflow users create \
+            --username "$${AIRFLOW_ADMIN_USER}" \
+            --password "$${AIRFLOW_ADMIN_PASSWORD}" \
+            --firstname NASA \
+            --lastname Admin \
+            --role Admin \
+            --email "$${AIRFLOW_ADMIN_EMAIL}"
+        fi
 
   airflow-scheduler:
     <<: *airflow-common
     command: scheduler
-    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
 
   airflow-webserver:
     <<: *airflow-common
     command: webserver
     ports:
-      - "8080:8080"
+      - "${AIRFLOW_HOST_BIND:-127.0.0.1}:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
     healthcheck:
-      test: ["CMD", "curl", "--fail", "http://localhost:8080/health"]
+      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-    restart: always
+
+  runner:
+    image: nasa-etl-runtime:local
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime
+    profiles: ["runner"]
+    environment:
+      TZ: ${TZ:-America/Manaus}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      NASA_API_KEY: ${NASA_API_KEY:?defina NASA_API_KEY no .env}
+      NASA_API_BASE: ${NASA_API_BASE:-https://api.nasa.gov}
+      NASA_API_RESOURCE: ${NASA_API_RESOURCE:-neo/rest/v1/feed}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB no .env}
+      POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER no .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      DATA_DIR: /var/lib/nasa-etl/data
+      DATA_RETENTION_DAYS: ${DATA_RETENTION_DAYS:-90}
+    volumes:
+      - pipeline_data:/var/lib/nasa-etl/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
 
   grafana:
     image: grafana/grafana-oss:10.2.2
-    ports:
-      - "3001:3000"
+    profiles: ["observability"]
     environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:?defina GRAFANA_ADMIN_USER no .env}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?defina GRAFANA_ADMIN_PASSWORD no .env}
+      POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER no .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB no .env}
+    ports:
+      - "${GRAFANA_HOST_BIND:-127.0.0.1}:3001:3000"
     volumes:
       - grafana_data:/var/lib/grafana
-      - ./dashboards/grafana:/etc/grafana/provisioning
+      - ./dashboards/grafana/provisioning_template.json:/var/lib/grafana/dashboards/nasa-etl.json:ro
+      - ./dashboards/grafana/provisioning:/etc/grafana/provisioning:ro
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
 
 volumes:
   postgres_data:
+  airflow_logs:
+  airflow_data:
+  pipeline_data:
   grafana_data:

@@ -64,6 +64,26 @@ variable "db_port" {
   default     = 5432
 }
 
+variable "rds_client_security_group_ids" {
+  description = "Security Groups autorizados a conectar no RDS; deixe vazio para negar todo acesso."
+  type        = set(string)
+  default     = []
+}
+
+variable "rds_admin_cidrs" {
+  description = "CIDRs temporários de administração do RDS. Nunca use blocos /0."
+  type        = set(string)
+  default     = []
+
+  validation {
+    condition = alltrue([
+      for cidr in var.rds_admin_cidrs :
+      cidr != "0.0.0.0/0" && cidr != "::/0" && can(cidrhost(cidr, 0))
+    ])
+    error_message = "rds_admin_cidrs deve conter somente CIDRs válidos e nunca /0."
+  }
+}
+
 variable "db_engine_version" {
   description = "Versão do Postgres (14.x elegível Free Tier)"
   type        = string

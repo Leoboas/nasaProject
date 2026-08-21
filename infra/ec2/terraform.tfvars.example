@@ -1,0 +1,17 @@
+aws_region    = "us-east-1"
+project_name  = "nasa-etl"
+environment   = "production"
+instance_type = "t3.micro"
+
+# Create the Key Pair in the AWS Console and give only its name here.
+# Never put the downloaded PEM private key in Terraform.
+key_pair_name = "nasa-etl-admin"
+
+# Replace with your current public IP. Never use 0.0.0.0/0 for SSH.
+admin_cidr = "203.0.113.10/32"
+
+root_volume_gb = 12
+
+# After merging a reviewed release, use an immutable tag (recommended), for example v1.0.0.
+repository_url = "https://github.com/Leoboas/nasaProject.git"
+repository_ref = "main"

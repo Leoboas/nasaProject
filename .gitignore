@@ -1,33 +1,44 @@
-﻿# Python
+# Python
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
+*.pyd
 .venv/
+.pytest_cache/
+.mypy_cache/
 
 # Airflow
 airflow/logs/
 airflow/airflow.db
 
-# Environment
+# Segredos e certificados
 .env
 .env.*
+!.env.example
+*.pem
+*.ppk
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
 
-# Data & notebooks
+# Dados e notebooks gerados pelo pipeline
 data/processed/
-*.ipynb_checkpoints
+data/samples/neo_raw_*.json
+.ipynb_checkpoints/
 
 # Docker
 *.pid
 *.log
 
-# Terraform
-infra/terraform/.terraform/
-infra/terraform/.terraform.lock.hcl
-infra/terraform/terraform.tfstate
-infra/terraform/terraform.tfstate.backup
-infra/terraform/terraform.tfvars
+# Terraform: state, variáveis e outputs podem conter segredos.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
 terraform_outputs.json
 
-# OS
+# Sistema operacional e editor
 .DS_Store
 Thumbs.db
+.idea/

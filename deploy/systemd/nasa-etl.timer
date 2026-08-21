@@ -1,0 +1,11 @@
+[Unit]
+Description=Agenda a ingestão NASA NEO uma vez por dia
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+Unit=nasa-etl.service
+
+[Install]
+WantedBy=timers.target

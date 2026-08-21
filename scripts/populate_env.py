@@ -74,10 +74,6 @@ def main():
     env.update(parse_env(ENV_PATH))
 
     required_map = {
-        "AWS_ACCESS_KEY_ID": outputs.get("iam_access_key_id"),
-        "AWS_SECRET_ACCESS_KEY": outputs.get("iam_secret_access_key"),
-        "AWS_REGION": outputs.get("aws_region", "us-east-1"),
-        "AWS_BUCKET_NAME": outputs.get("bucket_name"),
         "POSTGRES_HOST": outputs.get("postgres_host"),
         "POSTGRES_PORT": outputs.get("postgres_port"),
         "POSTGRES_DB": outputs.get("postgres_database"),

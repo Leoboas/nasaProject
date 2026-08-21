@@ -14,14 +14,6 @@ class NASAConfig:
 
 
 @dataclass
-class AWSConfig:
-    access_key: str = os.getenv("AWS_ACCESS_KEY_ID", "")
-    secret_key: str = os.getenv("AWS_SECRET_ACCESS_KEY", "")
-    region: str = os.getenv("AWS_REGION", os.getenv("AWS_DEFAULT_REGION", "us-east-1"))
-    s3_bucket: str = os.getenv("AWS_BUCKET_NAME", os.getenv("S3_BUCKET", "nasa-etl-demo"))
-
-
-@dataclass
 class PostgresConfig:
     user: str = os.getenv("POSTGRES_USER", "airflow")
     password: str = os.getenv("POSTGRES_PASSWORD", "airflow")
@@ -35,5 +27,4 @@ class PostgresConfig:
 
 
 nasa_config = NASAConfig()
-aws_config = AWSConfig()
 pg_config = PostgresConfig()

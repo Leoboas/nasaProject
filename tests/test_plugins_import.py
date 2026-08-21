@@ -1,5 +1,13 @@
 import os
+import sys
 
+import pytest
+
+
+pytestmark = pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="Airflow deve ser validado em Docker/Linux; não há suporte nativo ao Windows.",
+)
 
 def test_plugins_importable():
     # Evita erro de config do Airflow em ambiente local de teste
