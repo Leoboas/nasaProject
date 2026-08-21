@@ -1,0 +1,58 @@
+name: nasa-etl-runtime
+
+x-default-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER no arquivo de ambiente}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no arquivo de ambiente}
+      POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB no arquivo de ambiente}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - /opt/nasa-etl/db/migrations/0001_init.sql:/docker-entrypoint-initdb.d/0001_init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  nasa-etl:
+    image: nasa-etl-runtime:local
+    build:
+      context: ../..
+      dockerfile: Dockerfile.runtime
+    environment:
+      TZ: ${TZ:-America/Manaus}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      NASA_API_KEY: ${NASA_API_KEY:?defina NASA_API_KEY no arquivo de ambiente}
+      NASA_API_BASE: ${NASA_API_BASE:-https://api.nasa.gov}
+      NASA_API_RESOURCE: ${NASA_API_RESOURCE:-neo/rest/v1/feed}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB no arquivo de ambiente}
+      POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER no arquivo de ambiente}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no arquivo de ambiente}
+      DATA_DIR: /var/lib/nasa-etl/data
+      DATA_RETENTION_DAYS: ${DATA_RETENTION_DAYS:-90}
+    volumes:
+      - /var/lib/nasa-etl/data:/var/lib/nasa-etl/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+volumes:
+  postgres_data:

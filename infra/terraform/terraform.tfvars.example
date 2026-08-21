@@ -2,8 +2,8 @@ aws_region   = "us-east-1"
 project_name = "nasa-etl-demo"
 bucket_name  = "nasa-etl-demo"
 
-# Credenciais e alertas
-db_password = "SuaSenhaSegura123!"
+# Banco e alertas (copie para terraform.tfvars, que é ignorado pelo Git)
+db_password = "replace_with_a_long_random_secret"
 alert_email = "seu_email@exemplo.com"
 
 # Opcional: overrides
@@ -13,3 +13,7 @@ alert_email = "seu_email@exemplo.com"
 # s3_put_requests_threshold = 1800
 # rds_free_storage_threshold_gb = 2
 # budget_limit = 1.0
+
+# RDS permanece privado. Prefira o SG da EC2 criada em infra/ec2:
+# rds_client_security_group_ids = ["sg-0123456789abcdef0"]
+# rds_admin_cidrs = []

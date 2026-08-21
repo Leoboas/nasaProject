@@ -5,10 +5,10 @@ resource "aws_budgets_budget" "free_tier" {
   limit_unit   = "USD"
   time_unit    = "MONTHLY"
 
-cost_filter {
-  name   = "Service"
-  values = ["Amazon Simple Storage Service"]
-}
+  cost_filter {
+    name   = "Service"
+    values = ["Amazon Simple Storage Service"]
+  }
 
   notification {
     comparison_operator        = "GREATER_THAN"

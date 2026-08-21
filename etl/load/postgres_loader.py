@@ -66,7 +66,7 @@ class PostgresLoader:
             VALUES (
                 :id, :name, :close_approach_date, :absolute_magnitude_h,
                 :relative_velocity_km_s, :miss_distance_km, :alert_tag,
-                :is_potentially_hazardous_asteroid, :details_json
+                :is_potentially_hazardous_asteroid, CAST(:details_json AS JSONB)
             )
             ON CONFLICT (id, close_approach_date) DO UPDATE
             SET

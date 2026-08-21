@@ -29,7 +29,7 @@ resource "aws_cloudwatch_metric_alarm" "s3_storage" {
   treat_missing_data  = "notBreaching"
 
   dimensions = {
-    BucketName = aws_s3_bucket.data_lake.bucket
+    BucketName  = aws_s3_bucket.data_lake.bucket
     StorageType = "StandardStorage"
   }
 
@@ -52,7 +52,7 @@ resource "aws_cloudwatch_metric_alarm" "s3_put_requests" {
   treat_missing_data  = "notBreaching"
 
   dimensions = {
-    BucketName = aws_s3_bucket.data_lake.bucket
+    BucketName  = aws_s3_bucket.data_lake.bucket
     StorageType = "AllStorageTypes"
   }
 

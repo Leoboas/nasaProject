@@ -13,8 +13,9 @@ locals {
 # S3 Data Lake (Free Tier)
 # -------------------------
 resource "aws_s3_bucket" "data_lake" {
-  bucket        = var.bucket_name
-  force_destroy = true # facilita ambientes de dev
+  bucket = var.bucket_name
+  # Nunca apaga objetos automaticamente em um destroy.
+  force_destroy = false
   tags          = merge(local.common_tags, { Component = "data-lake" })
 }
 
@@ -57,7 +58,7 @@ resource "aws_s3_bucket_lifecycle_configuration" "data_lake" {
     status = "Enabled"
 
     expiration {
-      days                         = var.lifecycle_days
+      days = var.lifecycle_days
     }
 
     noncurrent_version_expiration {
@@ -72,66 +73,10 @@ resource "aws_s3_bucket_lifecycle_configuration" "data_lake" {
 
 
 # -------------------------
-# IAM User & Policy minimos
+# RDS Postgres (opcional)
 # -------------------------
-resource "aws_iam_user" "etl_user" {
-  name = "${var.project_name}-user"
-  tags = merge(local.common_tags, { Component = "iam" })
-}
-
-
-resource "aws_iam_access_key" "etl_user_key" {
-  user = aws_iam_user.etl_user.name
-}
-
-
-data "aws_iam_policy_document" "etl_policy" {
-  statement {
-    actions = [
-      "s3:ListBucket"
-    ]
-    resources = [
-      aws_s3_bucket.data_lake.arn
-    ]
-  }
-
-  statement {
-    actions = [
-      "s3:GetObject",
-      "s3:PutObject",
-      "s3:DeleteObject"
-    ]
-    resources = [
-      "${aws_s3_bucket.data_lake.arn}/*"
-    ]
-  }
-
-  statement {
-    actions = [
-      "logs:CreateLogGroup",
-      "logs:CreateLogStream",
-      "logs:PutLogEvents"
-    ]
-    resources = ["*"]
-  }
-
-  statement {
-    actions   = ["cloudwatch:PutMetricData"]
-    resources = ["*"]
-  }
-}
-
-
-resource "aws_iam_user_policy" "etl_user_policy" {
-  name   = "${var.project_name}-policy"
-  user   = aws_iam_user.etl_user.name
-  policy = data.aws_iam_policy_document.etl_policy.json
-}
-
-
-# -------------------------
-# RDS Postgres (Free Tier)
-# -------------------------
+# A EC2 deve usar a role/instance profile do módulo infra/ec2. Este módulo
+# deliberadamente não cria IAM users nem access keys estáticas.
 resource "aws_db_instance" "postgres" {
   identifier                 = "${var.project_name}-postgres"
   engine                     = "postgres"
@@ -144,7 +89,7 @@ resource "aws_db_instance" "postgres" {
   username                   = var.db_username
   password                   = var.db_password
   port                       = var.db_port
-  publicly_accessible        = true
+  publicly_accessible        = false
   multi_az                   = false
   backup_retention_period    = 0
   delete_automated_backups   = true

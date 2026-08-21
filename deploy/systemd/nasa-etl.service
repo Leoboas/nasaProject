@@ -1,0 +1,22 @@
+[Unit]
+Description=Job diario de ingestao e tratamento NASA NEO
+Requires=nasa-etl-postgres.service
+After=nasa-etl-postgres.service network-online.target
+ConditionPathExists=/etc/nasa-etl/nasa-etl.env
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/nasa-etl
+Environment=DOCKER_CONFIG=/var/lib/nasa-etl/docker-config
+ExecStart=/usr/bin/env bash /opt/nasa-etl/deploy/ec2/run-job.sh
+Restart=on-failure
+RestartSec=300
+TimeoutStartSec=600
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/var/lib/nasa-etl
+
+[Install]
+WantedBy=multi-user.target

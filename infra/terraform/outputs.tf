@@ -31,20 +31,6 @@ output "postgres_username" {
   sensitive = true
 }
 
-output "iam_user_name" {
-  value = aws_iam_user.etl_user.name
-}
-
-output "iam_access_key_id" {
-  value     = aws_iam_access_key.etl_user_key.id
-  sensitive = true
-}
-
-output "iam_secret_access_key" {
-  value     = aws_iam_access_key.etl_user_key.secret
-  sensitive = true
-}
-
 output "cloudwatch_alarm_arns" {
   value = [
     aws_cloudwatch_metric_alarm.s3_storage.arn,
