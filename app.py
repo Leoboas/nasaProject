@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
+import requests
 import streamlit as st
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
@@ -36,6 +37,7 @@ PHO_DISTANCE_AU = 0.05
 EARTH_RADIUS_KM = 6_371.0
 EARTH_ESCAPE_KM_S = 11.186
 EARTH_HELIOCENTRIC_AU = np.array([1.0, 0.0, 0.0])
+SENTRY_SUMMARY_URL = "https://ssd-api.jpl.nasa.gov/sentry.api"
 
 MONITORING_QUERY = text(
     """
@@ -155,6 +157,65 @@ def load_pipeline_runs() -> pd.DataFrame:
             return pd.read_sql_query(ETL_RUNS_QUERY, connection)
     except SQLAlchemyError:
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_sentry_summary() -> pd.DataFrame:
+    """Load official CNEOS Sentry impact-risk objects.
+
+    Sentry is the authoritative source used here for impact probability and
+    Torino/Palermo ratings. Network failure is intentionally non-fatal to the
+    dashboard because the PostgreSQL feed remains useful offline.
+    """
+
+    response = requests.get(SENTRY_SUMMARY_URL, timeout=12)
+    response.raise_for_status()
+    payload = response.json()
+    signature = payload.get("signature", {})
+    if signature.get("source") and "Sentry" not in signature.get("source", ""):
+        raise RuntimeError("Resposta inesperada da API CNEOS Sentry.")
+    records = payload.get("data", [])
+    if not records:
+        return pd.DataFrame()
+    frame = pd.DataFrame(records)
+    for column in ("ip", "ts_max", "ps_max", "ps_cum", "energy", "v_inf", "diameter"):
+        if column in frame:
+            frame[column] = pd.to_numeric(frame[column], errors="coerce")
+    if "range" in frame:
+        frame["range"] = frame["range"].astype(str)
+    return frame
+
+
+def render_official_risk_panel(sentry: pd.DataFrame) -> None:
+    st.subheader("🛰️ CNEOS Sentry · risco oficial de impacto")
+    if sentry.empty:
+        st.info("Nenhum objeto está atualmente listado pelo CNEOS Sentry ou a API está temporariamente indisponível.")
+        return
+    risk = sentry.sort_values("ip", ascending=False).copy()
+    max_ip = risk["ip"].max() if "ip" in risk else np.nan
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Objetos no Sentry", f"{len(risk):,}")
+    k2.metric("Maior probabilidade oficial", f"{max_ip:.6%}" if pd.notna(max_ip) else "N/D")
+    k3.metric("Fonte", "CNEOS Sentry v2")
+    visible = [column for column in ("des", "fullname", "range", "ip", "ts_max", "ps_max", "energy", "v_inf") if column in risk]
+    display = risk[visible].head(25).rename(columns={
+        "des": "Designação", "fullname": "Nome", "range": "Janela", "ip": "Probabilidade",
+        "ts_max": "Torino", "ps_max": "Palermo", "energy": "Energia (MT)", "v_inf": "V∞ (km/s)",
+    })
+    if "Probabilidade" in display:
+        display["Probabilidade"] = display["Probabilidade"].map(lambda value: f"{value:.6%}" if pd.notna(value) else "N/D")
+    st.dataframe(display, use_container_width=True, hide_index=True)
+    st.caption("Sentry calcula eventos virtuais de impacto a partir de órbitas e incertezas observacionais. A tabela não implica que um impacto seja esperado.")
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_sentry_object(designation: str) -> dict[str, Any]:
+    response = requests.get(SENTRY_SUMMARY_URL, params={"des": designation}, timeout=12)
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("error"):
+        return {}
+    return payload
 
 
 def _diameter_m(details: Any) -> float | None:
@@ -485,94 +546,40 @@ def _circle_geo(lat: float, lon: float, radius_km: float) -> tuple[list[float], 
     return list(lat + lat_delta * np.sin(angles)), list(lon + lon_delta * np.cos(angles))
 
 
-def render_impact_simulator(data: pd.DataFrame) -> None:
-    st.subheader("💥 Simulador teórico de impacto e onda de choque")
-    candidates = data[
-        data["is_potentially_hazardous_asteroid"]
-        | data["critical_window"]
-        | data["torino_scale_proxy"].gt(0)
-    ].copy()
-    if candidates.empty:
-        st.info("Nenhum asteroide perigoso está disponível para simulação nesta seleção.")
+def render_impact_simulator(sentry: pd.DataFrame) -> None:
+    st.subheader("💥 Eventos de impacto virtual · CNEOS Sentry")
+    if sentry.empty:
+        st.info("Não há eventos oficiais do Sentry disponíveis para simulação.")
         return
-    options = candidates.index.tolist()
-    selected = st.selectbox("Asteroide perigoso", options, format_func=lambda index: f"{candidates.loc[index, 'name']} · {candidates.loc[index, 'id']}")
-    asteroid = candidates.loc[selected]
-    if pd.isna(asteroid["energy_mt"]):
-        st.info("Este registro não possui diâmetro e velocidade suficientes para estimar energia.")
+    options = sentry["des"].dropna().astype(str).tolist()
+    selected = st.selectbox("Objeto com evento Sentry", options, format_func=lambda value: f"{value} · {sentry.loc[sentry['des'].astype(str).eq(value), 'fullname'].iloc[0] if 'fullname' in sentry and not sentry.loc[sentry['des'].astype(str).eq(value), 'fullname'].empty else ''}")
+    payload = load_sentry_object(selected)
+    summary = payload.get("summary", {})
+    events = pd.DataFrame(payload.get("data", []))
+    if not summary:
+        st.warning("O objeto deixou de estar no Sentry ou não há detalhes disponíveis neste momento.")
         return
-    scenarios = {
-        "Ocean Aberto (Pacífico Sul)": {
-            "latitude": -25.0,
-            "longitude": -130.0,
-            "efficiency": 0.12,
-            "medium": "água profunda",
-            "description": "Cenário oceânico: menor acoplamento direto ao solo; o risco costeiro/tsunami não é modelado aqui.",
-        },
-        "Região Continental Desértica (Saara)": {
-            "latitude": 24.0,
-            "longitude": 10.0,
-            "efficiency": 0.30,
-            "medium": "solo rochoso/arenoso",
-            "description": "Cenário continental remoto: acoplamento intermediário da energia ao terreno.",
-        },
-        "Região Urbana de Alta Densidade (Pior Cenário Teórico)": {
-            "latitude": 40.7,
-            "longitude": -74.0,
-            "efficiency": 0.65,
-            "medium": "ambiente urbano",
-            "description": "Cenário de comunicação de risco: maior acoplamento local e exposição humana; não é uma previsão.",
-        },
-    }
-    scenario_name = st.selectbox(
-        "Cenário pré-configurado",
-        list(scenarios),
-        help="Escolha um cenário para preencher automaticamente localização hipotética, meio e eficiência de acoplamento.",
+    probability = pd.to_numeric(summary.get("ip"), errors="coerce")
+    torino = summary.get("ts_max", "0")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Probabilidade oficial", f"{probability:.6%}" if pd.notna(probability) else "N/D")
+    c2.metric("Torino oficial", str(torino))
+    c3.metric("Energia ponderada", f"{summary.get('energy', 'N/D')} MT")
+    c4.metric("Método", str(summary.get("method", "N/D")))
+    if events.empty:
+        st.info("O Sentry reconhece o objeto, mas não retornou eventos virtuais detalhados.")
+    else:
+        columns = [column for column in ("date", "ip", "energy", "ts", "ps", "sigma_vi", "dist", "width") if column in events]
+        st.dataframe(events[columns], use_container_width=True, hide_index=True)
+    st.error("Local geográfico do impacto: indisponível nesta fonte oficial.")
+    st.markdown(
+        "O Sentry publica a data do evento virtual, a probabilidade, a energia e a posição no plano de incerteza. "
+        "Ele não publica latitude/longitude do ponto de impacto. Exibir um marcador no mapa neste estágio seria inventar uma coordenada."
     )
-    scenario = scenarios[scenario_name]
-    st.info(f"{scenario['description']} Meio: **{scenario['medium']}** · Eficiência: **{scenario['efficiency']:.0%}**.")
-    latitude = scenario["latitude"]
-    longitude = scenario["longitude"]
-    efficiency = scenario["efficiency"]
-    energy_mt = float(asteroid["energy_mt"])
-    def effects(item: dict[str, Any]) -> tuple[float, float]:
-        effective_mt = energy_mt * float(item["efficiency"])
-        crater = max(0.05, 0.08 * effective_mt ** (1 / 3))
-        return crater, crater * 12
-
-    crater_radius_km, shock_radius_km = effects(scenario)
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Energia estimada", f"{energy_mt:,.3f} MT")
-    m2.metric("Raio de cratera", f"{crater_radius_km:.2f} km")
-    m3.metric("Raio de onda de choque", f"{shock_radius_km:.1f} km")
-    figure = go.Figure()
-    # Render all preset points to compare the same object under each explicit
-    # hypothesis. Only the selected scenario receives the effect rings.
-    for name, item in scenarios.items():
-        short_name = name.split(" (")[0]
-        figure.add_trace(
-            go.Scattergeo(
-                lat=[item["latitude"]],
-                lon=[item["longitude"]],
-                mode="markers+text",
-                text=[short_name],
-                textposition="top center",
-                marker={"size": 11 if name == scenario_name else 7, "color": "#f8fafc" if name == scenario_name else "#64748b"},
-                name=f"Cenário: {short_name}",
-                hovertemplate=f"{name}<br>Lat/Lon: {item['latitude']:.2f}, {item['longitude']:.2f}<br>Meio: {item['medium']}<extra></extra>",
-            )
-        )
-    for radius, color, label in ((shock_radius_km, "#fbbf24", "Onda de choque"), (crater_radius_km, "#fb7185", "Cratera")):
-        lats, lons = _circle_geo(latitude, longitude, radius)
-        figure.add_trace(go.Scattergeo(lat=lats, lon=lons, mode="lines", line={"color": color, "width": 2}, name=label))
-    figure.update_layout(template="plotly_dark", height=500, geo={"showland": True, "landcolor": "#172033", "showocean": True, "oceancolor": "#071426", "projection_type": "equirectangular"}, margin=dict(l=0, r=0, t=20, b=0))
-    st.plotly_chart(figure, use_container_width=True)
-    comparison = []
-    for name, item in scenarios.items():
-        crater, shock = effects(item)
-        comparison.append({"Cenário": name, "Latitude": item["latitude"], "Longitude": item["longitude"], "Meio": item["medium"], "Eficiência": f"{item['efficiency']:.0%}", "Cratera (km)": round(crater, 2), "Onda de choque (km)": round(shock, 1)})
-    st.dataframe(pd.DataFrame(comparison), use_container_width=True, hide_index=True)
-    st.warning("Os três locais são hipóteses de UX, não uma localização calculada do impacto. Para obter um ponto real seriam necessários efemérides JPL/NASA, estado orbital, covariância e propagação Monte Carlo.")
+    st.info(
+        "Para calcular uma faixa geográfica real, o pipeline precisa armazenar a solução do virtual impactor (vetor de estado + covariância), "
+        "propagá-la com JPL Horizons/orekit/poliastro e converter o ponto de entrada para latitude/longitude usando UTC e rotação ITRF da Terra."
+    )
 
 
 def render_table(data: pd.DataFrame) -> None:
@@ -604,6 +611,11 @@ def main() -> None:
         with st.expander("Detalhe técnico"):
             st.code(str(error))
         return
+    try:
+        sentry = load_sentry_summary()
+    except (requests.RequestException, RuntimeError, ValueError) as error:
+        sentry = pd.DataFrame()
+        st.warning(f"CNEOS Sentry indisponível temporariamente; o painel PostgreSQL continua ativo. ({error})")
     render_pipeline_status(runs)
     if raw.empty:
         st.info("A tabela `asteroides_monitoria` está acessível, mas ainda não possui registros.")
@@ -615,6 +627,7 @@ def main() -> None:
         st.info("Nenhum registro atende aos filtros selecionados. Ajuste o período ou o nível de risco.")
         return
     render_kpis(filtered, runs)
+    render_official_risk_panel(sentry)
     st.divider()
     render_charts(filtered)
     st.divider()
@@ -624,7 +637,7 @@ def main() -> None:
     with radar_tab:
         render_orbital_radar(filtered)
     with impact_tab:
-        render_impact_simulator(filtered)
+        render_impact_simulator(sentry)
     st.divider()
     render_table(filtered)
 
