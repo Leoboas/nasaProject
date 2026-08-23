@@ -35,6 +35,7 @@ TNT_J_PER_MT = 4.184e15
 PHO_DISTANCE_AU = 0.05
 EARTH_RADIUS_KM = 6_371.0
 EARTH_ESCAPE_KM_S = 11.186
+EARTH_HELIOCENTRIC_AU = np.array([1.0, 0.0, 0.0])
 
 MONITORING_QUERY = text(
     """
@@ -418,16 +419,37 @@ def _orbital_direction(identifier: Any) -> tuple[float, float, float]:
     return math.sin(theta) * math.cos(phi), math.sin(theta) * math.sin(phi), math.cos(theta)
 
 
+def _projected_encounter(identifier: Any, miss_distance_au: float) -> dict[str, np.ndarray | float]:
+    """Create an Earth-anchored geometry-only encounter corridor.
+
+    The NEO feed has no orbital state vector. The dashed line is therefore a
+    visual tangent whose closest point is exactly the supplied scalar
+    miss-distance; it is not an ephemeris or a collision prediction.
+    """
+
+    travel = np.asarray(_orbital_direction(identifier), dtype=float)
+    travel /= max(np.linalg.norm(travel), 1e-12)
+    reference = np.array([0.0, 0.0, 1.0])
+    if abs(float(np.dot(travel, reference))) > 0.92:
+        reference = np.array([0.0, 1.0, 0.0])
+    lateral = np.cross(travel, reference)
+    lateral /= max(np.linalg.norm(lateral), 1e-12)
+    closest = EARTH_HELIOCENTRIC_AU + lateral * max(float(miss_distance_au), 0.0)
+    span = min(0.60, max(0.08, float(miss_distance_au) * 2.5))
+    start = closest - travel * span
+    end = closest + travel * span
+    return {"start": start, "closest": closest, "end": end, "miss_au": float(miss_distance_au)}
+
+
 def render_orbital_radar(data: pd.DataFrame) -> None:
     st.subheader("🌞 Radar orbital 3D · Sistema Solar interno")
     orbital = data.dropna(subset=["miss_distance_au", "velocity_kmh"]).copy()
     if orbital.empty:
         st.info("Não há distância e velocidade suficientes para projetar o radar orbital.")
         return
-    coordinates = orbital["id"].map(_orbital_direction)
-    offsets = pd.DataFrame(coordinates.tolist(), index=orbital.index) * orbital["miss_distance_au"].to_numpy()[:, None]
-    # A Terra é a referência dos dados de aproximação; o Sol fica na origem.
-    orbital[["x", "y", "z"]] = offsets + np.array([1.0, 0.0, 0.0])
+    projections = [_projected_encounter(row["id"], row["miss_distance_au"]) for _, row in orbital.iterrows()]
+    orbital["projection"] = projections
+    orbital[["x", "y", "z"]] = np.vstack([item["start"] for item in projections])
     figure = go.Figure()
     grid = np.linspace(-1.7, 1.7, 18)
     plane_x, plane_y = np.meshgrid(grid, grid)
@@ -443,29 +465,17 @@ def render_orbital_radar(data: pd.DataFrame) -> None:
         subset = orbital[orbital["risk_level"] == risk]
         if subset.empty:
             continue
-        figure.add_trace(go.Scatter3d(x=subset["x"], y=subset["y"], z=subset["z"], mode="markers", name=risk, marker={"size": 5, "color": color}, customdata=np.c_[subset["name"], subset["miss_distance_au"], subset["velocity_kmh"]], hovertemplate="%{customdata[0]}<br>Distância: %{customdata[1]:.4f} AU<br>Velocidade: %{customdata[2]:,.0f} km/h<extra></extra>"))
+        figure.add_trace(go.Scatter3d(x=subset["x"], y=subset["y"], z=subset["z"], mode="markers", name=risk, marker={"size": 5, "color": color}, customdata=np.c_[subset["name"], subset["miss_distance_au"], subset["velocity_kmh"]], hovertemplate="%{customdata[0]}<br>Início da rota projetada<br>Passagem: %{customdata[1]:.5f} AU da Terra<br>Velocidade: %{customdata[2]:,.0f} km/h<extra></extra>"))
     route_legend = True
-    for _, asteroid in orbital.head(30).iterrows():
-        direction = np.array(_orbital_direction(asteroid["id"]))
-        span = max(0.03, min(0.35, float(asteroid["miss_distance_au"]) * 0.6))
-        start = np.array([1.0, 0.0, 0.0]) - direction * span
-        end = np.array([1.0, 0.0, 0.0]) + direction * span
-        figure.add_trace(
-            go.Scatter3d(
-                x=[start[0], end[0]],
-                y=[start[1], end[1]],
-                z=[start[2], end[2]],
-                mode="lines",
-                line={"color": "#e2e8f0", "width": 2, "dash": "dash"},
-                name="Rota projetada",
-                showlegend=route_legend,
-                hovertemplate=f"Rota visual: {asteroid['name']}<extra></extra>",
-            )
-        )
+    for _, asteroid in orbital.sort_values("miss_distance_au").head(30).iterrows():
+        projection = asteroid["projection"]
+        start, end, closest = projection["start"], projection["end"], projection["closest"]
+        figure.add_trace(go.Scatter3d(x=[start[0], end[0]], y=[start[1], end[1]], z=[start[2], end[2]], mode="lines", line={"color": "#e2e8f0", "width": 2, "dash": "dash"}, name="Rota projetada", showlegend=route_legend, hovertemplate=f"Rota visual: {asteroid['name']}<br>Passagem: {asteroid['miss_distance_au']:.5f} AU da Terra<extra></extra>"))
         route_legend = False
+        figure.add_trace(go.Scatter3d(x=[EARTH_HELIOCENTRIC_AU[0], closest[0]], y=[EARTH_HELIOCENTRIC_AU[1], closest[1]], z=[EARTH_HELIOCENTRIC_AU[2], closest[2]], mode="lines+markers", line={"color": "#94a3b8", "width": 1, "dash": "dot"}, marker={"size": 2, "color": "#f8fafc"}, name="Distância à Terra", showlegend=False, hovertemplate=f"{asteroid['name']}<br>Ponto de máxima aproximação (projeção)<extra></extra>"))
     figure.update_layout(template="plotly_dark", height=650, scene={"xaxis_title": "X heliocêntrico (AU)", "yaxis_title": "Y heliocêntrico (AU)", "zaxis_title": "Z / inclinação (AU)", "aspectmode": "data"}, margin=dict(l=0, r=0, t=20, b=0))
     st.plotly_chart(figure, use_container_width=True)
-    st.caption("Sol na origem e Terra em 1 AU; órbitas planetárias são esquemáticas. Asteroides usam a distância escalar da tabela e uma direção determinística, pois não há efemérides/vetores orbitais completos.")
+    st.caption("Sol na origem e Terra em 1 AU; cada tracejado é uma rota de triagem tangente à Terra, ancorada na distância escalar da API. Sem efemérides, vetor orbital e covariância, não representa a rota real nem confirma colisão.")
 
 
 def _circle_geo(lat: float, lon: float, radius_km: float) -> tuple[list[float], list[float]]:
@@ -477,7 +487,11 @@ def _circle_geo(lat: float, lon: float, radius_km: float) -> tuple[list[float], 
 
 def render_impact_simulator(data: pd.DataFrame) -> None:
     st.subheader("💥 Simulador teórico de impacto e onda de choque")
-    candidates = data[data["is_potentially_hazardous_asteroid"]].copy()
+    candidates = data[
+        data["is_potentially_hazardous_asteroid"]
+        | data["critical_window"]
+        | data["torino_scale_proxy"].gt(0)
+    ].copy()
     if candidates.empty:
         st.info("Nenhum asteroide perigoso está disponível para simulação nesta seleção.")
         return
@@ -521,20 +535,44 @@ def render_impact_simulator(data: pd.DataFrame) -> None:
     longitude = scenario["longitude"]
     efficiency = scenario["efficiency"]
     energy_mt = float(asteroid["energy_mt"])
-    effective_mt = energy_mt * efficiency
-    crater_radius_km = max(0.05, 0.08 * effective_mt ** (1 / 3))
-    shock_radius_km = crater_radius_km * 12
+    def effects(item: dict[str, Any]) -> tuple[float, float]:
+        effective_mt = energy_mt * float(item["efficiency"])
+        crater = max(0.05, 0.08 * effective_mt ** (1 / 3))
+        return crater, crater * 12
+
+    crater_radius_km, shock_radius_km = effects(scenario)
     m1, m2, m3 = st.columns(3)
     m1.metric("Energia estimada", f"{energy_mt:,.3f} MT")
     m2.metric("Raio de cratera", f"{crater_radius_km:.2f} km")
     m3.metric("Raio de onda de choque", f"{shock_radius_km:.1f} km")
     figure = go.Figure()
+    # Render all preset points to compare the same object under each explicit
+    # hypothesis. Only the selected scenario receives the effect rings.
+    for name, item in scenarios.items():
+        short_name = name.split(" (")[0]
+        figure.add_trace(
+            go.Scattergeo(
+                lat=[item["latitude"]],
+                lon=[item["longitude"]],
+                mode="markers+text",
+                text=[short_name],
+                textposition="top center",
+                marker={"size": 11 if name == scenario_name else 7, "color": "#f8fafc" if name == scenario_name else "#64748b"},
+                name=f"Cenário: {short_name}",
+                hovertemplate=f"{name}<br>Lat/Lon: {item['latitude']:.2f}, {item['longitude']:.2f}<br>Meio: {item['medium']}<extra></extra>",
+            )
+        )
     for radius, color, label in ((shock_radius_km, "#fbbf24", "Onda de choque"), (crater_radius_km, "#fb7185", "Cratera")):
         lats, lons = _circle_geo(latitude, longitude, radius)
         figure.add_trace(go.Scattergeo(lat=lats, lon=lons, mode="lines", line={"color": color, "width": 2}, name=label))
-    figure.add_trace(go.Scattergeo(lat=[latitude], lon=[longitude], mode="markers", marker={"size": 10, "color": "#f8fafc"}, name="Ponto hipotético"))
     figure.update_layout(template="plotly_dark", height=500, geo={"showland": True, "landcolor": "#172033", "showocean": True, "oceancolor": "#071426", "projection_type": "equirectangular"}, margin=dict(l=0, r=0, t=20, b=0))
     st.plotly_chart(figure, use_container_width=True)
+    comparison = []
+    for name, item in scenarios.items():
+        crater, shock = effects(item)
+        comparison.append({"Cenário": name, "Latitude": item["latitude"], "Longitude": item["longitude"], "Meio": item["medium"], "Eficiência": f"{item['efficiency']:.0%}", "Cratera (km)": round(crater, 2), "Onda de choque (km)": round(shock, 1)})
+    st.dataframe(pd.DataFrame(comparison), use_container_width=True, hide_index=True)
+    st.warning("Os três locais são hipóteses de UX, não uma localização calculada do impacto. Para obter um ponto real seriam necessários efemérides JPL/NASA, estado orbital, covariância e propagação Monte Carlo.")
 
 
 def render_table(data: pd.DataFrame) -> None:
