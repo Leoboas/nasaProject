@@ -46,6 +46,16 @@ MONITORING_QUERY = text(
     """
 )
 
+ETL_RUNS_QUERY = text(
+    """
+    SELECT run_date, started_at, finished_at, objects_received,
+           alerts_loaded, status, error_message
+    FROM etl_runs
+    ORDER BY finished_at DESC
+    LIMIT 30
+    """
+)
+
 
 @dataclass(frozen=True)
 class DatabaseConfig:
@@ -133,6 +143,17 @@ def get_engine() -> Engine:
 def load_data() -> pd.DataFrame:
     with get_engine().connect() as connection:
         return pd.read_sql_query(MONITORING_QUERY, connection)
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def load_pipeline_runs() -> pd.DataFrame:
+    """Read ETL heartbeats; older databases may not have the table yet."""
+
+    try:
+        with get_engine().connect() as connection:
+            return pd.read_sql_query(ETL_RUNS_QUERY, connection)
+    except SQLAlchemyError:
+        return pd.DataFrame()
 
 
 def _diameter_m(details: Any) -> float | None:
@@ -298,16 +319,34 @@ def render_sidebar(data: pd.DataFrame) -> pd.DataFrame:
     return result
 
 
-def render_kpis(data: pd.DataFrame) -> None:
+def render_pipeline_status(runs: pd.DataFrame) -> None:
+    if runs.empty:
+        st.info("Ainda não há histórico de execução do ETL. A tabela etl_runs será criada na próxima coleta.")
+        return
+    latest = runs.iloc[0]
+    finished = pd.to_datetime(latest["finished_at"], errors="coerce")
+    timestamp = finished.strftime("%d/%m/%Y %H:%M UTC") if pd.notna(finished) else "N/D"
+    status = str(latest.get("status", "unknown")).upper()
+    objects_received = int(latest.get("objects_received", 0) or 0)
+    alerts_loaded = int(latest.get("alerts_loaded", 0) or 0)
+    if status == "SUCCESS":
+        st.success(f"✅ Última execução ETL: **{timestamp}** · {objects_received} objetos recebidos · {alerts_loaded} registros persistidos.")
+    else:
+        st.warning(f"⚠️ Última execução ETL: **{timestamp}** · status {status} · {objects_received} objetos recebidos · {alerts_loaded} registros persistidos.")
+
+
+def render_kpis(data: pd.DataFrame, runs: pd.DataFrame) -> None:
     dangerous = int(data["is_potentially_hazardous_asteroid"].sum())
     mean_speed = data["velocity_kmh"].mean()
     max_diameter = data["diameter_m"].max()
-    last_processed = data["created_at"].max()
+    last_alert_loaded = data["created_at"].max()
+    last_run = pd.to_datetime(runs.iloc[0]["finished_at"], errors="coerce") if not runs.empty else pd.NaT
     cols = st.columns(4)
     cols[0].metric("☄️ Asteroides perigosos", f"{dangerous:,}")
     cols[1].metric("⚡ Velocidade média", f"{mean_speed:,.0f} km/h" if pd.notna(mean_speed) else "—")
     cols[2].metric("📏 Maior diâmetro", f"{max_diameter:,.0f} m" if pd.notna(max_diameter) else "N/D")
-    cols[3].metric("🕒 Último processamento", last_processed.strftime("%d/%m/%Y %H:%M") if pd.notna(last_processed) else "N/D")
+    cols[3].metric("🕒 Última execução ETL", last_run.strftime("%d/%m/%Y %H:%M") if pd.notna(last_run) else "N/D")
+    st.caption(f"Último alerta carregado na tabela: {last_alert_loaded.strftime('%d/%m/%Y %H:%M') if pd.notna(last_alert_loaded) else 'N/D'}")
     st.markdown("#### 🪐 Física espacial e janela de risco")
     physics = st.columns(5)
     max_energy = data["energy_mt"].max()
@@ -405,6 +444,25 @@ def render_orbital_radar(data: pd.DataFrame) -> None:
         if subset.empty:
             continue
         figure.add_trace(go.Scatter3d(x=subset["x"], y=subset["y"], z=subset["z"], mode="markers", name=risk, marker={"size": 5, "color": color}, customdata=np.c_[subset["name"], subset["miss_distance_au"], subset["velocity_kmh"]], hovertemplate="%{customdata[0]}<br>Distância: %{customdata[1]:.4f} AU<br>Velocidade: %{customdata[2]:,.0f} km/h<extra></extra>"))
+    route_legend = True
+    for _, asteroid in orbital.head(30).iterrows():
+        direction = np.array(_orbital_direction(asteroid["id"]))
+        span = max(0.03, min(0.35, float(asteroid["miss_distance_au"]) * 0.6))
+        start = np.array([1.0, 0.0, 0.0]) - direction * span
+        end = np.array([1.0, 0.0, 0.0]) + direction * span
+        figure.add_trace(
+            go.Scatter3d(
+                x=[start[0], end[0]],
+                y=[start[1], end[1]],
+                z=[start[2], end[2]],
+                mode="lines",
+                line={"color": "#e2e8f0", "width": 2, "dash": "dash"},
+                name="Rota projetada",
+                showlegend=route_legend,
+                hovertemplate=f"Rota visual: {asteroid['name']}<extra></extra>",
+            )
+        )
+        route_legend = False
     figure.update_layout(template="plotly_dark", height=650, scene={"xaxis_title": "X heliocêntrico (AU)", "yaxis_title": "Y heliocêntrico (AU)", "zaxis_title": "Z / inclinação (AU)", "aspectmode": "data"}, margin=dict(l=0, r=0, t=20, b=0))
     st.plotly_chart(figure, use_container_width=True)
     st.caption("Sol na origem e Terra em 1 AU; órbitas planetárias são esquemáticas. Asteroides usam a distância escalar da tabela e uma direção determinística, pois não há efemérides/vetores orbitais completos.")
@@ -501,12 +559,14 @@ def main() -> None:
     st.markdown('<span class="arch-badge">AWS EC2 • Docker • PostgreSQL • Systemd • Airflow • Streamlit</span>', unsafe_allow_html=True)
     try:
         raw = load_data()
+        runs = load_pipeline_runs()
     except (SQLAlchemyError, RuntimeError, OSError, ValueError) as error:
         st.error("Não foi possível consultar os dados de monitoramento neste momento.")
         st.info("Confirme os Secrets do Streamlit e a conectividade segura com o PostgreSQL.")
         with st.expander("Detalhe técnico"):
             st.code(str(error))
         return
+    render_pipeline_status(runs)
     if raw.empty:
         st.info("A tabela `asteroides_monitoria` está acessível, mas ainda não possui registros.")
         st.info("Execute o pipeline ETL ou aguarde a próxima coleta agendada.")
@@ -516,7 +576,7 @@ def main() -> None:
     if filtered.empty:
         st.info("Nenhum registro atende aos filtros selecionados. Ajuste o período ou o nível de risco.")
         return
-    render_kpis(filtered)
+    render_kpis(filtered, runs)
     st.divider()
     render_charts(filtered)
     st.divider()

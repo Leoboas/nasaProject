@@ -87,6 +87,7 @@ def run_daily_etl(
     idempotente no PostgreSQL porque o loader usa a chave (id, data).
     """
 
+    started_at = dt.datetime.now(dt.timezone.utc)
     execution_date = run_date or dt.date.today()
     root = Path(data_dir or os.getenv("DATA_DIR", "data"))
     samples_dir = root / "samples"
@@ -108,6 +109,16 @@ def run_daily_etl(
 
     target_loader = loader or PostgresLoader(table_name="asteroides_monitoria")
     loaded = target_loader.load_dataframe(alerts)
+    record_run = getattr(target_loader, "record_run", None)
+    if callable(record_run):
+        record_run(
+            run_date=execution_date,
+            started_at=started_at,
+            finished_at=dt.datetime.now(dt.timezone.utc),
+            objects_received=len(normalized),
+            alerts_loaded=loaded,
+            status="success",
+        )
     logger.info(
         "ETL concluído para %s: %s objetos recebidos, %s alertas carregados.",
         execution_date.isoformat(),

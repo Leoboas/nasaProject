@@ -60,7 +60,7 @@ def test_filter_alerts_serializes_raw_payload():
     assert json.loads(alerts.iloc[0]["details_json"])["name"] == "2026 Atlas-1"
 
 
-def test_run_daily_etl_writes_artifacts_and_loads_only_alerts(tmp_path):
+def test_run_daily_etl_writes_artifacts_and_loads_all_monitoring_objects(tmp_path):
     loader = FakeLoader()
     count = run_daily_etl(
         run_date=dt.date(2026, 8, 20),
@@ -69,8 +69,8 @@ def test_run_daily_etl_writes_artifacts_and_loads_only_alerts(tmp_path):
         loader=loader,
     )
 
-    assert count == 3
-    assert len(loader.dataframe) == 3
+    assert count == 4
+    assert len(loader.dataframe) == 4
     assert (tmp_path / "samples" / "neo_raw_2026-08-20.json").exists()
     assert (tmp_path / "processed" / "neo_alertas_2026-08-20.csv").exists()
 

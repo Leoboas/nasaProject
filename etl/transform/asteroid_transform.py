@@ -6,7 +6,7 @@ from etl.common.schemas import ASTEROID_COLUMNS
 
 
 def normalize_neo_feed(raw: dict) -> pd.DataFrame:
-    """Normaliza o feed NEO da NASA em um DataFrame plano."""
+    """Normalize the NASA NEO feed into one row per close approach."""
     records = []
     neo_data = raw.get("near_earth_objects", {})
     for date_str, asteroids in neo_data.items():
@@ -34,8 +34,7 @@ def normalize_neo_feed(raw: dict) -> pd.DataFrame:
                     "raw": asteroid,
                 }
             )
-    df = pd.DataFrame(records, columns=ASTEROID_COLUMNS + ["raw"])
-    return df
+    return pd.DataFrame(records, columns=ASTEROID_COLUMNS + ["raw"])
 
 
 def _safe_float(value):
@@ -46,21 +45,15 @@ def _safe_float(value):
 
 
 def filter_alerts(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Mantém somente asteroides relevantes:
-    - potencialmente perigosos
-    - ou nome contendo 'atlas'
-    - ou nome iniciando com '3i'
-    Adiciona tag de alerta e serializa detalhes.
+    """Prepare every NEO for monitoring instead of discarding routine objects.
+
+    Tags distinguish potentially hazardous, ATLAS, 3I and routine objects.
+    Official impact probabilities still require orbital solutions such as JPL
+    Sentry and are not inferred by this ETL.
     """
     if df.empty:
         return df
-    mask_hazard = df["is_potentially_hazardous_asteroid"].fillna(False)
-    mask_atlas = df["name"].fillna("").str.lower().str.contains("atlas")
-    mask_3i = df["name"].fillna("").str.lower().str.startswith("3i")
-    filtered = df[mask_hazard | mask_atlas | mask_3i].copy()
-    if filtered.empty:
-        return filtered
+    monitored = df.copy()
 
     def _tag(row):
         name = str(row.get("name", "")).lower()
@@ -71,12 +64,10 @@ def filter_alerts(df: pd.DataFrame) -> pd.DataFrame:
             tags.append("atlas")
         if name.startswith("3i"):
             tags.append("3i")
-        return ",".join(tags) if tags else "other"
+        return ",".join(tags) if tags else "routine"
 
-    filtered["alert_tag"] = filtered.apply(_tag, axis=1)
-    # Mantém o payload original para auditoria sem depender de APIs internas
-    # do pandas (pd.io.json.dumps foi removido em versões recentes).
-    filtered["details_json"] = filtered["raw"].apply(
+    monitored["alert_tag"] = monitored.apply(_tag, axis=1)
+    monitored["details_json"] = monitored["raw"].apply(
         lambda value: json.dumps(value, ensure_ascii=False, default=str)
     )
     keep_cols = [
@@ -90,4 +81,4 @@ def filter_alerts(df: pd.DataFrame) -> pd.DataFrame:
         "is_potentially_hazardous_asteroid",
         "details_json",
     ]
-    return filtered[keep_cols]
+    return monitored[keep_cols]

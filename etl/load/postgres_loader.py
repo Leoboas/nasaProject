@@ -59,3 +59,56 @@ class PostgresLoader:
         with self.engine.begin() as connection:
             connection.execute(statement, rows)
         return len(dataframe)
+
+    def record_run(
+        self,
+        *,
+        run_date,
+        started_at,
+        finished_at,
+        objects_received: int,
+        alerts_loaded: int,
+        status: str = "success",
+        error_message: str | None = None,
+    ) -> None:
+        """Persist a heartbeat even when the daily filter loads zero rows."""
+
+        ddl = text(
+            """
+            CREATE TABLE IF NOT EXISTS etl_runs (
+                id BIGSERIAL PRIMARY KEY,
+                run_date DATE NOT NULL,
+                started_at TIMESTAMPTZ NOT NULL,
+                finished_at TIMESTAMPTZ NOT NULL,
+                objects_received INTEGER NOT NULL DEFAULT 0,
+                alerts_loaded INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL,
+                error_message TEXT
+            )
+            """
+        )
+        statement = text(
+            """
+            INSERT INTO etl_runs (
+                run_date, started_at, finished_at, objects_received,
+                alerts_loaded, status, error_message
+            ) VALUES (
+                :run_date, :started_at, :finished_at, :objects_received,
+                :alerts_loaded, :status, :error_message
+            )
+            """
+        )
+        with self.engine.begin() as connection:
+            connection.execute(ddl)
+            connection.execute(
+                statement,
+                {
+                    "run_date": run_date,
+                    "started_at": started_at,
+                    "finished_at": finished_at,
+                    "objects_received": objects_received,
+                    "alerts_loaded": alerts_loaded,
+                    "status": status,
+                    "error_message": error_message,
+                },
+            )
