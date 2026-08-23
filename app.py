@@ -33,6 +33,8 @@ LD_KM = 384_400.0
 ROCK_DENSITY_KG_M3 = 2_000.0
 TNT_J_PER_MT = 4.184e15
 PHO_DISTANCE_AU = 0.05
+EARTH_RADIUS_KM = 6_371.0
+EARTH_ESCAPE_KM_S = 11.186
 
 MONITORING_QUERY = text(
     """
@@ -164,6 +166,48 @@ def _kinetic_energy_mt(diameter_m: float, velocity_km_s: float) -> float:
     return energy_j / TNT_J_PER_MT
 
 
+def _diameter_from_absolute_magnitude(h_value: Any, albedo: float = 0.14) -> float | None:
+    """Estimate diameter from H only when the API payload lacks a diameter."""
+
+    try:
+        h_value = float(h_value)
+        return 1329.0 / math.sqrt(albedo) * 10 ** (-h_value / 5.0) * 1000.0
+    except (TypeError, ValueError):
+        return None
+
+
+def _impact_probability_proxy(distance_km: float, diameter_m: float, velocity_km_s: float) -> float:
+    """Geometry-only screening proxy, not a Sentry impact probability.
+
+    A real impact probability requires an orbit solution, covariance and
+    future encounter epoch. This proxy uses the Earth-plus-object cross section
+    and gravitational focusing to avoid presenting a fabricated probability as
+    an official NASA/JPL risk result.
+    """
+
+    if not all(pd.notna(value) for value in (distance_km, diameter_m, velocity_km_s)):
+        return np.nan
+    effective_radius = (EARTH_RADIUS_KM + max(diameter_m, 0.0) / 2.0) * math.sqrt(
+        1.0 + (EARTH_ESCAPE_KM_S / max(velocity_km_s, 0.1)) ** 2
+    )
+    if distance_km <= effective_radius:
+        return 1.0
+    return float(min(1.0, (effective_radius / distance_km) ** 2))
+
+
+def _torino_proxy(probability: float, energy_mt: float) -> int:
+    """Map screening values to a conservative communication-only Torino proxy."""
+
+    if pd.isna(probability) or pd.isna(energy_mt) or probability < 1e-6:
+        return 0
+    if probability < 1e-4:
+        return 1
+    if probability < 1e-2:
+        return 2
+    energy_bands = (1.0, 10.0, 100.0, 1_000.0, 10_000.0, 100_000.0, 1_000_000.0)
+    return min(10, 3 + sum(energy_mt >= band for band in energy_bands))
+
+
 def prepare_data(frame: pd.DataFrame) -> pd.DataFrame:
     if frame.empty:
         return frame.copy()
@@ -174,6 +218,7 @@ def prepare_data(frame: pd.DataFrame) -> pd.DataFrame:
         "details_json": None,
         "miss_distance_km": np.nan,
         "relative_velocity_km_s": np.nan,
+        "absolute_magnitude_h": np.nan,
         "created_at": pd.NaT,
         "close_approach_date": pd.NaT,
     }
@@ -186,6 +231,9 @@ def prepare_data(frame: pd.DataFrame) -> pd.DataFrame:
     data["miss_distance_km"] = pd.to_numeric(data["miss_distance_km"], errors="coerce")
     data["velocity_kmh"] = data["relative_velocity_km_s"] * 3600.0
     data["diameter_m"] = data["details_json"].map(_diameter_m)
+    data["diameter_m"] = data["diameter_m"].fillna(
+        data["absolute_magnitude_h"].map(_diameter_from_absolute_magnitude)
+    )
     data["mass_kg"] = ROCK_DENSITY_KG_M3 * (4.0 / 3.0) * math.pi * (data["diameter_m"] / 2.0) ** 3
     data["energy_mt"] = data.apply(
         lambda row: _kinetic_energy_mt(row["diameter_m"], row["relative_velocity_km_s"])
@@ -196,6 +244,15 @@ def prepare_data(frame: pd.DataFrame) -> pd.DataFrame:
     data["miss_distance_ld"] = data["miss_distance_km"] / LD_KM
     data["miss_distance_au"] = data["miss_distance_km"] / AU_KM
     data["critical_window"] = data["miss_distance_au"].lt(PHO_DISTANCE_AU)
+    data["impact_probability_proxy"] = data.apply(
+        lambda row: _impact_probability_proxy(
+            row["miss_distance_km"], row["diameter_m"], row["relative_velocity_km_s"]
+        ),
+        axis=1,
+    )
+    data["torino_scale_proxy"] = data.apply(
+        lambda row: _torino_proxy(row["impact_probability_proxy"], row["energy_mt"]), axis=1
+    )
     data["is_potentially_hazardous_asteroid"] = data["is_potentially_hazardous_asteroid"].fillna(False).astype(bool)
     data["risk_level"] = "MONITORAMENTO"
     data.loc[data["alert_tag"].fillna("").astype(str).str.len() > 0, "risk_level"] = "ALERTA"
@@ -252,14 +309,19 @@ def render_kpis(data: pd.DataFrame) -> None:
     cols[2].metric("📏 Maior diâmetro", f"{max_diameter:,.0f} m" if pd.notna(max_diameter) else "N/D")
     cols[3].metric("🕒 Último processamento", last_processed.strftime("%d/%m/%Y %H:%M") if pd.notna(last_processed) else "N/D")
     st.markdown("#### 🪐 Física espacial e janela de risco")
-    physics = st.columns(3)
+    physics = st.columns(5)
     max_energy = data["energy_mt"].max()
     min_ld = data["miss_distance_ld"].min()
     critical = int(data["critical_window"].fillna(False).sum())
+    max_probability = data["impact_probability_proxy"].max()
+    max_torino = int(data["torino_scale_proxy"].max()) if not data.empty else 0
     physics[0].metric("Energia cinética máxima", f"{max_energy:,.3f} MT TNT" if pd.notna(max_energy) else "N/D")
     physics[1].metric("Menor passagem", f"{min_ld:,.3f} LD" if pd.notna(min_ld) else "N/D")
     physics[2].metric("Janela crítica (< 0,05 AU)", f"{critical:,} objetos")
-    st.caption("Estimativa esférica: densidade rochosa de 2.000 kg/m³. Não representa previsão de impacto.")
+    probability_label = "< 0.0001%" if pd.isna(max_probability) or max_probability < 1e-6 else f"{max_probability * 100:.4f}%"
+    physics[3].metric("Probabilidade de impacto (proxy)", probability_label)
+    physics[4].metric("Escala de Torino (proxy)", str(max_torino), help="A escala oficial combina probabilidade futura e energia; este valor é uma triagem sem covariância orbital.")
+    st.caption("Estimativa esférica: densidade rochosa de 2.000 kg/m³. Probabilidade/Torino são proxies geométricos; valores < 0,0001% são exibidos como risco nulo para comunicação.")
 
 
 def render_charts(data: pd.DataFrame) -> None:
@@ -278,7 +340,7 @@ def render_charts(data: pd.DataFrame) -> None:
                 color="risk_level",
                 symbol="is_anomaly",
                 hover_name="name",
-                hover_data={"energy_mt": ":,.4f", "miss_distance_ld": ":,.3f", "alert_tag": True},
+                hover_data={"energy_mt": ":,.4f", "miss_distance_ld": ":,.3f", "impact_probability_proxy": ":.6%", "torino_scale_proxy": True, "alert_tag": True},
                 color_discrete_map={"CRÍTICO": "#fb7185", "ALERTA": "#fbbf24", "MONITORAMENTO": "#67e8f9"},
                 labels={"diameter_m": "Diâmetro (m)", "velocity_kmh": "Velocidade (km/h)", "risk_level": "Risco"},
                 template="plotly_dark",
@@ -318,23 +380,34 @@ def _orbital_direction(identifier: Any) -> tuple[float, float, float]:
 
 
 def render_orbital_radar(data: pd.DataFrame) -> None:
-    st.subheader("🌍 Radar orbital 3D")
+    st.subheader("🌞 Radar orbital 3D · Sistema Solar interno")
     orbital = data.dropna(subset=["miss_distance_au", "velocity_kmh"]).copy()
     if orbital.empty:
         st.info("Não há distância e velocidade suficientes para projetar o radar orbital.")
         return
     coordinates = orbital["id"].map(_orbital_direction)
-    orbital[["x", "y", "z"]] = pd.DataFrame(coordinates.tolist(), index=orbital.index) * orbital["miss_distance_au"].to_numpy()[:, None]
+    offsets = pd.DataFrame(coordinates.tolist(), index=orbital.index) * orbital["miss_distance_au"].to_numpy()[:, None]
+    # A Terra é a referência dos dados de aproximação; o Sol fica na origem.
+    orbital[["x", "y", "z"]] = offsets + np.array([1.0, 0.0, 0.0])
     figure = go.Figure()
-    figure.add_trace(go.Scatter3d(x=[0], y=[0], z=[0], mode="markers+text", text=["Terra"], textposition="top center", marker={"size": 12, "color": "#38bdf8"}, name="Terra"))
+    grid = np.linspace(-1.7, 1.7, 18)
+    plane_x, plane_y = np.meshgrid(grid, grid)
+    figure.add_trace(go.Surface(x=plane_x, y=plane_y, z=np.zeros_like(plane_x), opacity=0.10, showscale=False, colorscale=[[0, "#38bdf8"], [1, "#38bdf8"]], name="Eclíptica", hoverinfo="skip"))
+    figure.add_trace(go.Scatter3d(x=[0], y=[0], z=[0], mode="markers+text", text=["Sol"], textposition="top center", marker={"size": 16, "color": "#fbbf24"}, name="Sol"))
+    planet_specs = [("Mercúrio", 0.387, "#a8a29e"), ("Vênus", 0.723, "#f59e0b"), ("Terra", 1.0, "#38bdf8"), ("Marte", 1.524, "#ef4444")]
+    for planet, radius, color in planet_specs:
+        angles = np.linspace(0, 2 * math.pi, 180)
+        figure.add_trace(go.Scatter3d(x=radius * np.cos(angles), y=radius * np.sin(angles), z=np.zeros_like(angles), mode="lines", line={"color": color, "width": 2}, name=f"Órbita de {planet}", hoverinfo="skip", showlegend=False))
+        phase = {"Mercúrio": 0.7, "Vênus": 2.0, "Terra": 0.0, "Marte": 4.2}[planet]
+        figure.add_trace(go.Scatter3d(x=[radius * math.cos(phase)], y=[radius * math.sin(phase)], z=[0], mode="markers+text", text=[planet], textposition="top center", marker={"size": 8 if planet != "Terra" else 10, "color": color}, name=planet))
     for risk, color in {"CRÍTICO": "#fb7185", "ALERTA": "#fbbf24", "MONITORAMENTO": "#67e8f9"}.items():
         subset = orbital[orbital["risk_level"] == risk]
         if subset.empty:
             continue
         figure.add_trace(go.Scatter3d(x=subset["x"], y=subset["y"], z=subset["z"], mode="markers", name=risk, marker={"size": 5, "color": color}, customdata=np.c_[subset["name"], subset["miss_distance_au"], subset["velocity_kmh"]], hovertemplate="%{customdata[0]}<br>Distância: %{customdata[1]:.4f} AU<br>Velocidade: %{customdata[2]:,.0f} km/h<extra></extra>"))
-    figure.update_layout(template="plotly_dark", height=600, scene={"xaxis_title": "X (AU)", "yaxis_title": "Y (AU)", "zaxis_title": "Z (AU)", "aspectmode": "data"}, margin=dict(l=0, r=0, t=20, b=0))
+    figure.update_layout(template="plotly_dark", height=650, scene={"xaxis_title": "X heliocêntrico (AU)", "yaxis_title": "Y heliocêntrico (AU)", "zaxis_title": "Z / inclinação (AU)", "aspectmode": "data"}, margin=dict(l=0, r=0, t=20, b=0))
     st.plotly_chart(figure, use_container_width=True)
-    st.caption("Projeção visual determinística baseada na distância escalar; a tabela não contém efemérides/vetores orbitais completos.")
+    st.caption("Sol na origem e Terra em 1 AU; órbitas planetárias são esquemáticas. Asteroides usam a distância escalar da tabela e uma direção determinística, pois não há efemérides/vetores orbitais completos.")
 
 
 def _circle_geo(lat: float, lon: float, radius_km: float) -> tuple[list[float], list[float]]:
@@ -356,11 +429,39 @@ def render_impact_simulator(data: pd.DataFrame) -> None:
     if pd.isna(asteroid["energy_mt"]):
         st.info("Este registro não possui diâmetro e velocidade suficientes para estimar energia.")
         return
-    st.caption("Cenário hipotético para comunicação científica; não é previsão de local, data ou severidade de impacto.")
-    col1, col2, col3 = st.columns(3)
-    latitude = col1.number_input("Latitude hipotética", -90.0, 90.0, 0.0, 0.1)
-    longitude = col2.number_input("Longitude hipotética", -180.0, 180.0, 0.0, 0.1)
-    efficiency = col3.slider("Eficiência de acoplamento", 0.05, 1.0, 0.30, 0.05)
+    scenarios = {
+        "Ocean Aberto (Pacífico Sul)": {
+            "latitude": -25.0,
+            "longitude": -130.0,
+            "efficiency": 0.12,
+            "medium": "água profunda",
+            "description": "Cenário oceânico: menor acoplamento direto ao solo; o risco costeiro/tsunami não é modelado aqui.",
+        },
+        "Região Continental Desértica (Saara)": {
+            "latitude": 24.0,
+            "longitude": 10.0,
+            "efficiency": 0.30,
+            "medium": "solo rochoso/arenoso",
+            "description": "Cenário continental remoto: acoplamento intermediário da energia ao terreno.",
+        },
+        "Região Urbana de Alta Densidade (Pior Cenário Teórico)": {
+            "latitude": 40.7,
+            "longitude": -74.0,
+            "efficiency": 0.65,
+            "medium": "ambiente urbano",
+            "description": "Cenário de comunicação de risco: maior acoplamento local e exposição humana; não é uma previsão.",
+        },
+    }
+    scenario_name = st.selectbox(
+        "Cenário pré-configurado",
+        list(scenarios),
+        help="Escolha um cenário para preencher automaticamente localização hipotética, meio e eficiência de acoplamento.",
+    )
+    scenario = scenarios[scenario_name]
+    st.info(f"{scenario['description']} Meio: **{scenario['medium']}** · Eficiência: **{scenario['efficiency']:.0%}**.")
+    latitude = scenario["latitude"]
+    longitude = scenario["longitude"]
+    efficiency = scenario["efficiency"]
     energy_mt = float(asteroid["energy_mt"])
     effective_mt = energy_mt * efficiency
     crater_radius_km = max(0.05, 0.08 * effective_mt ** (1 / 3))
@@ -380,10 +481,11 @@ def render_impact_simulator(data: pd.DataFrame) -> None:
 
 def render_table(data: pd.DataFrame) -> None:
     st.subheader("📋 Registros monitorados")
-    columns = ["id", "name", "close_approach_date", "risk_level", "velocity_kmh", "diameter_m", "energy_mt", "miss_distance_ld", "is_anomaly", "alert_tag"]
+    columns = ["id", "name", "close_approach_date", "risk_level", "velocity_kmh", "diameter_m", "energy_mt", "miss_distance_ld", "impact_probability_proxy", "torino_scale_proxy", "is_anomaly", "alert_tag"]
     display = data[columns].copy()
     display["close_approach_date"] = display["close_approach_date"].dt.strftime("%d/%m/%Y")
-    display = display.rename(columns={"id": "ID", "name": "Nome", "close_approach_date": "Aproximação", "risk_level": "Risco", "velocity_kmh": "Velocidade (km/h)", "diameter_m": "Diâmetro (m)", "energy_mt": "Energia (MT)", "miss_distance_ld": "Distância (LD)", "is_anomaly": "Anomalia", "alert_tag": "Tag"})
+    display["impact_probability_proxy"] = display["impact_probability_proxy"].map(lambda value: "< 0.0001%" if pd.isna(value) or value < 1e-6 else f"{value * 100:.4f}%")
+    display = display.rename(columns={"id": "ID", "name": "Nome", "close_approach_date": "Aproximação", "risk_level": "Risco", "velocity_kmh": "Velocidade (km/h)", "diameter_m": "Diâmetro (m)", "energy_mt": "Energia (MT)", "miss_distance_ld": "Distância (LD)", "impact_probability_proxy": "Probabilidade impacto (proxy)", "torino_scale_proxy": "Torino (proxy)", "is_anomaly": "Anomalia", "alert_tag": "Tag"})
     st.dataframe(display, use_container_width=True, hide_index=True)
     buffer = io.StringIO()
     display.to_csv(buffer, index=False)
