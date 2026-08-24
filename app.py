@@ -12,6 +12,7 @@ import io
 import json
 import math
 import os
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,6 +39,7 @@ EARTH_RADIUS_KM = 6_371.0
 EARTH_ESCAPE_KM_S = 11.186
 EARTH_HELIOCENTRIC_AU = np.array([1.0, 0.0, 0.0])
 SENTRY_SUMMARY_URL = "https://ssd-api.jpl.nasa.gov/sentry.api"
+HORIZONS_URL = "https://ssd.jpl.nasa.gov/api/horizons.api"
 
 MONITORING_QUERY = text(
     """
@@ -216,6 +218,76 @@ def load_sentry_object(designation: str) -> dict[str, Any]:
     if payload.get("error"):
         return {}
     return payload
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def load_horizons_vector(designation: str, event_date: str) -> dict[str, Any]:
+    """Fetch the nominal Earth-centered state at a Sentry event epoch."""
+
+    response = requests.get(
+        HORIZONS_URL,
+        params={
+            "format": "json",
+            "COMMAND": f"'DES={designation};'",
+            "OBJ_DATA": "NO",
+            "MAKE_EPHEM": "YES",
+            "EPHEM_TYPE": "VECTORS",
+            "CENTER": "500@399",
+            "TLIST": f"'{event_date}'",
+            "TLIST_TYPE": "CAL",
+            "VEC_TABLE": "2",
+            "REF_PLANE": "FRAME",
+            "VEC_CORR": "NONE",
+            "OUT_UNITS": "KM-S",
+        },
+        timeout=20,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    result = payload.get("result", "")
+    if not result or "$$SOE" not in result:
+        raise RuntimeError("Horizons não retornou um vetor para o evento selecionado.")
+    block = result.split("$$SOE", 1)[1].split("$$EOE", 1)[0]
+    match = re.search(
+        r"X\s*=\s*([+-]?\d+(?:\.\d+)?[Ee][+-]?\d+).*?"
+        r"Y\s*=\s*([+-]?\d+(?:\.\d+)?[Ee][+-]?\d+).*?"
+        r"Z\s*=\s*([+-]?\d+(?:\.\d+)?[Ee][+-]?\d+).*?"
+        r"VX\s*=\s*([+-]?\d+(?:\.\d+)?[Ee][+-]?\d+).*?"
+        r"VY\s*=\s*([+-]?\d+(?:\.\d+)?[Ee][+-]?\d+).*?"
+        r"VZ\s*=\s*([+-]?\d+(?:\.\d+)?[Ee][+-]?\d+)",
+        block,
+        flags=re.S,
+    )
+    if not match:
+        raise RuntimeError("Formato de vetor Horizons não reconhecido.")
+    return {"position_km": np.array([float(value) for value in match.groups()[:3]]), "velocity_km_s": np.array([float(value) for value in match.groups()[3:]])}
+
+
+def _julian_date(event_date: str) -> float:
+    base, _, fraction = str(event_date).partition(".")
+    timestamp = pd.Timestamp(base, tz="UTC")
+    if fraction:
+        timestamp += pd.to_timedelta(float(f"0.{fraction}"), unit="D")
+    return timestamp.value / 86_400_000_000_000 + 2_440_587.5
+
+
+def _nominal_subpoint(position_km: np.ndarray, event_date: str) -> tuple[float, float, float]:
+    """Convert an inertial Earth-relative vector into a nominal ground track."""
+
+    obliquity = math.radians(23.4392911)
+    ecliptic_to_equatorial = np.array(
+        [[1.0, 0.0, 0.0], [0.0, math.cos(obliquity), -math.sin(obliquity)], [0.0, math.sin(obliquity), math.cos(obliquity)]]
+    )
+    equatorial = ecliptic_to_equatorial @ position_km
+    jd = _julian_date(event_date)
+    centuries = (jd - 2_451_545.0) / 36_525.0
+    gmst = (280.46061837 + 360.98564736629 * (jd - 2_451_545.0) + 0.000387933 * centuries**2 - centuries**3 / 38_710_000.0) % 360.0
+    angle = math.radians(gmst)
+    earth_fixed = np.array([[math.cos(angle), math.sin(angle), 0.0], [-math.sin(angle), math.cos(angle), 0.0], [0.0, 0.0, 1.0]]) @ equatorial
+    radius = float(np.linalg.norm(earth_fixed))
+    latitude = math.degrees(math.asin(float(earth_fixed[2] / max(radius, 1e-9))))
+    longitude = math.degrees(math.atan2(float(earth_fixed[1]), float(earth_fixed[0])))
+    return latitude, ((longitude + 180.0) % 360.0) - 180.0, radius
 
 
 def _diameter_m(details: Any) -> float | None:
@@ -571,10 +643,28 @@ def render_impact_simulator(sentry: pd.DataFrame) -> None:
     else:
         columns = [column for column in ("date", "ip", "energy", "ts", "ps", "sigma_vi", "dist", "width") if column in events]
         st.dataframe(events[columns], use_container_width=True, hide_index=True)
-    st.error("Local geográfico do impacto: indisponível nesta fonte oficial.")
+        event_options = events["date"].astype(str).tolist() if "date" in events else []
+        if event_options:
+            event_date = st.selectbox("Evento virtual para calcular a geometria nominal", event_options)
+            try:
+                vector = load_horizons_vector(selected, event_date)
+                latitude, longitude, radius_km = _nominal_subpoint(vector["position_km"], event_date)
+                nominal_collision = radius_km <= 6_420.0
+                st.metric("Distância nominal ao geocentro", f"{radius_km:,.0f} km")
+                figure = go.Figure()
+                figure.add_trace(go.Scattergeo(lat=[latitude], lon=[longitude], mode="markers+text", text=["Subponto nominal JPL"], textposition="top center", marker={"size": 12, "color": "#fb7185" if nominal_collision else "#38bdf8"}, name="Subponto nominal", hovertemplate=f"Lat: {latitude:.3f}°<br>Lon: {longitude:.3f}°<br>Raio nominal: {radius_km:,.0f} km<extra></extra>"))
+                figure.update_layout(template="plotly_dark", height=480, geo={"showland": True, "landcolor": "#172033", "showocean": True, "oceancolor": "#071426", "projection_type": "equirectangular"}, margin=dict(l=0, r=0, t=20, b=0))
+                st.plotly_chart(figure, use_container_width=True)
+                if nominal_collision:
+                    st.success(f"A órbita nominal interpolada cruza a esfera atmosférica. Subponto calculado: {latitude:.3f}°, {longitude:.3f}°.")
+                else:
+                    st.info(f"A órbita nominal não cruza a Terra; o marcador é apenas o subponto da direção de aproximação: {latitude:.3f}°, {longitude:.3f}°.")
+            except (requests.RequestException, RuntimeError, ValueError, TypeError) as error:
+                st.warning(f"Não foi possível calcular o subponto nominal pelo Horizons: {error}")
+    st.error("Este mapa não é uma faixa de impacto probabilística.")
     st.markdown(
-        "O Sentry publica a data do evento virtual, a probabilidade, a energia e a posição no plano de incerteza. "
-        "Ele não publica latitude/longitude do ponto de impacto. Exibir um marcador no mapa neste estágio seria inventar uma coordenada."
+        "O marcador é calculado com o vetor nominal Terra-asteroide do JPL Horizons e a rotação aproximada da Terra. "
+        "O Sentry ainda não fornece a orientação geográfica de cada virtual impactor; portanto, não há como desenhar uma área probabilística real sem a covariância e o vetor específico desse impactor."
     )
     st.info(
         "Para calcular uma faixa geográfica real, o pipeline precisa armazenar a solução do virtual impactor (vetor de estado + covariância), "
