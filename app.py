@@ -23,6 +23,7 @@ import plotly.graph_objects as go
 import requests
 import streamlit as st
 from dotenv import load_dotenv
+from pandas.errors import DatabaseError as PandasDatabaseError
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine, URL
 from sqlalchemy.exc import SQLAlchemyError
@@ -55,7 +56,7 @@ ETL_RUNS_QUERY = text(
     """
     SELECT run_date, started_at, finished_at, objects_received,
            alerts_loaded, status, error_message
-    FROM etl_runs
+    FROM public.etl_runs
     ORDER BY finished_at DESC
     LIMIT 30
     """
@@ -157,8 +158,11 @@ def load_pipeline_runs() -> pd.DataFrame:
     try:
         with get_engine().connect() as connection:
             return pd.read_sql_query(ETL_RUNS_QUERY, connection)
-    except SQLAlchemyError:
-        return pd.DataFrame()
+    except (SQLAlchemyError, PandasDatabaseError):
+        # Databases created before migration 0002 do not have this optional
+        # observability table. Keep the dashboard usable until the next ETL
+        # run creates it (or an administrator applies the migration).
+        return pd.DataFrame(columns=["run_date", "started_at", "finished_at", "objects_received", "alerts_loaded", "status", "error_message"])
 
 
 @st.cache_data(ttl=3600, show_spinner=False)

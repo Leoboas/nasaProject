@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS etl_runs (
+CREATE TABLE IF NOT EXISTS public.etl_runs (
     id BIGSERIAL PRIMARY KEY,
     run_date DATE NOT NULL,
     started_at TIMESTAMPTZ NOT NULL,
@@ -9,4 +9,4 @@ CREATE TABLE IF NOT EXISTS etl_runs (
     error_message TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_etl_runs_finished_at ON etl_runs (finished_at DESC);
+CREATE INDEX IF NOT EXISTS idx_etl_runs_finished_at ON public.etl_runs (finished_at DESC);

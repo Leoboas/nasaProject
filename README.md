@@ -171,6 +171,8 @@ terraform -chdir=infra/ec2 apply
 
 Depois do bootstrap, armazene o ambiente operacional em `/etc/nasa-etl/nasa-etl.env` com permissões `600`, fora do repositório. O timer `nasa-etl.timer` agenda o job diário e o serviço `nasa-etl.service` executa o container do ETL.
 
+O job aplica as migrations idempotentes antes de cada coleta. Isso é importante para volumes PostgreSQL já existentes: a tabela `public.etl_runs` foi adicionada depois da primeira versão e não é recriada automaticamente pelo entrypoint do Docker em um volume persistente.
+
 ## Qualidade e confiabilidade
 
 - Timeouts explícitos e propagação de erro para chamadas da API NASA.

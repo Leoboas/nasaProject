@@ -50,6 +50,7 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./db/migrations/0001_init.sql:/docker-entrypoint-initdb.d/0001_init.sql:ro
+      - ./db/migrations/0002_etl_runs.sql:/docker-entrypoint-initdb.d/0002_etl_runs.sql:ro
     ports:
       - "${POSTGRES_HOST_BIND:-127.0.0.1}:5432:5432"
     healthcheck:

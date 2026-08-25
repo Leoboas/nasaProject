@@ -75,7 +75,7 @@ class PostgresLoader:
 
         ddl = text(
             """
-            CREATE TABLE IF NOT EXISTS etl_runs (
+            CREATE TABLE IF NOT EXISTS public.etl_runs (
                 id BIGSERIAL PRIMARY KEY,
                 run_date DATE NOT NULL,
                 started_at TIMESTAMPTZ NOT NULL,
@@ -89,7 +89,7 @@ class PostgresLoader:
         )
         statement = text(
             """
-            INSERT INTO etl_runs (
+            INSERT INTO public.etl_runs (
                 run_date, started_at, finished_at, objects_received,
                 alerts_loaded, status, error_message
             ) VALUES (
