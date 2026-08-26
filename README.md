@@ -115,6 +115,10 @@ streamlit run app.py
 
 O dashboard aceita as variáveis `POSTGRES_*` do `.env` local. Em produção, os valores dos Secrets `DB_*` têm prioridade.
 
+### Separação EC2 × RDS
+
+Este projeto de demonstração usa o PostgreSQL do Compose na EC2 (`POSTGRES_HOST=postgres` dentro dos containers). O módulo `infra/terraform` provisiona um RDS independente para outro projeto e não deve ser usado como destino do ETL desta aplicação. No Streamlit Cloud, configure `DB_HOST` com o endereço público controlado da EC2 (ou um proxy seguro), nunca com o endpoint do RDS do outro projeto. Se os Secrets apontarem para o RDS, o dashboard poderá conectar normalmente e ainda assim exibir zero registros, pois serão bancos diferentes.
+
 ### 4. Executar testes do ETL
 
 Em Linux, macOS ou Docker, instale o ambiente de desenvolvimento respeitando as constraints do Airflow:
