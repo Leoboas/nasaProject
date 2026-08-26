@@ -162,7 +162,9 @@ def load_pipeline_runs() -> pd.DataFrame:
         # Databases created before migration 0002 do not have this optional
         # observability table. Keep the dashboard usable until the next ETL
         # run creates it (or an administrator applies the migration).
-        return pd.DataFrame(columns=["run_date", "started_at", "finished_at", "objects_received", "alerts_loaded", "status", "error_message"])
+        frame = pd.DataFrame(columns=["run_date", "started_at", "finished_at", "objects_received", "alerts_loaded", "status", "error_message"])
+        frame.attrs["table_missing"] = True
+        return frame
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
@@ -459,7 +461,10 @@ def render_sidebar(data: pd.DataFrame) -> pd.DataFrame:
 
 def render_pipeline_status(runs: pd.DataFrame) -> None:
     if runs.empty:
-        st.info("Ainda não há histórico de execução do ETL. A tabela etl_runs será criada na próxima coleta.")
+        if runs.attrs.get("table_missing"):
+            st.warning("A tabela `public.etl_runs` não existe nesta base. O dashboard está conectado, mas a migration 0002 ainda não foi aplicada.")
+        else:
+            st.info("A tabela `public.etl_runs` existe, mas ainda não há histórico de execução do ETL.")
         return
     latest = runs.iloc[0]
     finished = pd.to_datetime(latest["finished_at"], errors="coerce")
@@ -712,8 +717,8 @@ def main() -> None:
         st.warning(f"CNEOS Sentry indisponível temporariamente; o painel PostgreSQL continua ativo. ({error})")
     render_pipeline_status(runs)
     if raw.empty:
-        st.info("A tabela `asteroides_monitoria` está acessível, mas ainda não possui registros.")
-        st.info("Execute o pipeline ETL ou aguarde a próxima coleta agendada.")
+        st.warning("A tabela `asteroides_monitoria` está acessível, mas possui zero registros nesta base de dados.")
+        st.info("Isso indica que o ETL ainda não gravou nesta mesma instância/credencial. Verifique o `nasa-etl.timer`, o último log do serviço e se `DB_HOST` aponta para a EC2 correta.")
         return
     prepared = prepare_data(raw)
     filtered = render_sidebar(prepared)
