@@ -9,6 +9,10 @@ x-default-logging: &default-logging
 services:
   postgres:
     image: postgres:16-alpine
+    # Required by the read-only Streamlit dashboard. Restrict TCP/5432 in the
+    # EC2 Security Group to trusted sources or place the database behind TLS.
+    ports:
+      - "5432:5432"
     environment:
       POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER no arquivo de ambiente}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no arquivo de ambiente}
