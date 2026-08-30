@@ -144,6 +144,17 @@ Ative apenas um agendador (Airflow ou systemd) para evitar coletas duplicadas.
 - UPSERT torna o reprocessamento idempotente.
 - Métricas físicas e anomalias são análises, não previsões oficiais de impacto.
 
+## Data Quality e Machine Learning
+
+Antes de qualquer escrita no PostgreSQL, o contrato de dados verifica colunas
+obrigatórias, chaves duplicadas, datas, valores numéricos e JSON. Lotes inválidos
+são registrados como warning e interrompidos de forma atômica.
+
+O dashboard calcula features estáveis para o Isolation Forest, incluindo
+transformações logarítmicas e a proporção diâmetro/velocidade. A detecção é uma
+triagem estatística reproduzível; avaliações oficiais de impacto continuam
+dependendo dos dados do CNEOS Sentry.
+
 ## Licença
 
 Consulte [LICENSE](LICENSE).

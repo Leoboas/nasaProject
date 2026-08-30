@@ -26,6 +26,7 @@ from botocore.exceptions import ClientError
 from sqlalchemy import Boolean, Date, Float, Text as SqlText, create_engine, text
 
 from etl.common.config import get_nasa_config, get_postgres_config
+from etl.quality.data_contracts import enforce_monitoring_contract
 from etl.transform.asteroid_transform import filter_alerts, normalize_neo_feed
 
 LOGGER = logging.getLogger(__name__)
@@ -239,6 +240,8 @@ def process_silver_gold(**context: Any) -> int:
     run_date = _run_date(context)
     started_at = dt.datetime.now(dt.timezone.utc)
     engine = create_engine(get_postgres_config().sqlalchemy_url, pool_pre_ping=True, pool_recycle=300)
+    normalized_count = 0
+    alerts_count = 0
 
     try:
         key = _s3_key(run_date)
@@ -246,7 +249,10 @@ def process_silver_gold(**context: Any) -> int:
         with response["Body"] as body:
             raw = json.loads(body.read().decode("utf-8"))
         normalized = normalize_neo_feed(raw)
+        normalized_count = len(normalized)
         alerts = filter_alerts(normalized)
+        alerts_count = len(alerts)
+        enforce_monitoring_contract(alerts)
         with engine.begin() as connection:
             _ensure_target_tables(connection)
             loaded = _upsert_dataframe(connection, alerts)
@@ -255,12 +261,20 @@ def process_silver_gold(**context: Any) -> int:
         return loaded
     except ClientError as exc:
         message = f"Falha ao ler Bronze no S3: {exc}"
-        _record_run(engine, run_date, started_at, received=0, loaded=0, status="failed", error_message=message)
+        _record_run(engine, run_date, started_at, received=normalized_count, loaded=0, status="failed", error_message=message)
         raise AirflowException(message) from exc
     except Exception as exc:
         message = str(exc)
         try:
-            _record_run(engine, run_date, started_at, received=0, loaded=0, status="failed", error_message=message[:2000])
+            _record_run(
+                engine,
+                run_date,
+                started_at,
+                received=normalized_count,
+                loaded=alerts_count,
+                status="failed",
+                error_message=message[:2000],
+            )
         except Exception:
             LOGGER.exception("Nao foi possivel registrar falha em etl_runs")
         raise

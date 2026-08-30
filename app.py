@@ -29,6 +29,9 @@ from sqlalchemy.engine import Engine, URL
 from sqlalchemy.exc import SQLAlchemyError
 from sklearn.ensemble import IsolationForest
 
+from etl.risk.torino import emit_torino_alerts, find_torino_alerts
+from etl.transform.anomaly_features import ANOMALY_FEATURE_COLUMNS, build_anomaly_features
+
 load_dotenv(override=False)
 
 AU_KM = 149_597_870.7
@@ -200,6 +203,12 @@ def render_official_risk_panel(sentry: pd.DataFrame) -> None:
         st.info("Nenhum objeto está atualmente listado pelo CNEOS Sentry ou a API está temporariamente indisponível.")
         return
     risk = sentry.sort_values("ip", ascending=False).copy()
+    critical_torino = find_torino_alerts(risk)
+    if not critical_torino.empty:
+        emit_torino_alerts(critical_torino)
+        st.error(
+            f"Alerta crítico: {len(critical_torino)} objeto(s) possuem Escala de Torino oficial acima de 1."
+        )
     max_ip = risk["ip"].max() if "ip" in risk else np.nan
     k1, k2, k3 = st.columns(3)
     k1.metric("Objetos no Sentry", f"{len(risk):,}")
@@ -438,7 +447,8 @@ def prepare_data(frame: pd.DataFrame) -> pd.DataFrame:
     data.loc[data["is_potentially_hazardous_asteroid"], "risk_level"] = "CRÍTICO"
     data["is_anomaly"] = False
     data["anomaly_score"] = np.nan
-    features = ["velocity_kmh", "mass_kg", "miss_distance_km"]
+    data = build_anomaly_features(data)
+    features = list(ANOMALY_FEATURE_COLUMNS)
     valid = data[features].replace([np.inf, -np.inf], np.nan).dropna()
     if len(valid) >= 5 and valid.nunique().gt(1).any():
         model = IsolationForest(n_estimators=200, contamination="auto", random_state=42)

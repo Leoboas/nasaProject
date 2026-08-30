@@ -8,6 +8,7 @@ from sqlalchemy.engine import Engine
 
 from etl.common.config import get_postgres_config
 from etl.common.logging_config import get_logger
+from etl.quality.data_contracts import enforce_monitoring_contract
 
 
 logger = get_logger(__name__)
@@ -41,6 +42,7 @@ class PostgresLoader:
             logger.info("DataFrame vazio; nada a carregar.")
             return 0
 
+        enforce_monitoring_contract(dataframe)
         logger.info("Carregando %s registros em %s", len(dataframe), self.table_name)
         rows = dataframe.to_dict(orient="records")
         statement = text(
