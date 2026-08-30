@@ -23,7 +23,7 @@ from airflow.exceptions import AirflowException
 from airflow.operators.python import PythonOperator
 from botocore.config import Config
 from botocore.exceptions import ClientError
-from sqlalchemy import create_engine, text
+from sqlalchemy import Boolean, Date, Float, Text as SqlText, create_engine, text
 
 from etl.common.config import get_nasa_config, get_postgres_config
 from etl.transform.asteroid_transform import filter_alerts, normalize_neo_feed
@@ -175,35 +175,59 @@ def _upsert_dataframe(connection: Any, dataframe: pd.DataFrame) -> int:
     # to_sql writes a staging table; the following SQL keeps the target table
     # idempotent on (id, close_approach_date), as required for daily reruns.
     staging = f"_nasa_stage_{uuid.uuid4().hex}"
-    try:
-        dataframe.to_sql(staging, connection, schema="public", if_exists="replace", index=False, method="multi")
-        connection.execute(
-            text(
-                f"""
-                INSERT INTO public.{MONITORING_TABLE} (
-                    id, name, close_approach_date, absolute_magnitude_h,
-                    relative_velocity_km_s, miss_distance_km, alert_tag,
-                    is_potentially_hazardous_asteroid, details_json
-                )
-                SELECT id, name, close_approach_date, absolute_magnitude_h,
-                       relative_velocity_km_s, miss_distance_km, alert_tag,
-                       is_potentially_hazardous_asteroid,
-                       CAST(details_json AS JSONB)
-                FROM public."{staging}"
-                ON CONFLICT (id, close_approach_date) DO UPDATE SET
-                    name = EXCLUDED.name,
-                    absolute_magnitude_h = EXCLUDED.absolute_magnitude_h,
-                    relative_velocity_km_s = EXCLUDED.relative_velocity_km_s,
-                    miss_distance_km = EXCLUDED.miss_distance_km,
-                    alert_tag = EXCLUDED.alert_tag,
-                    is_potentially_hazardous_asteroid = EXCLUDED.is_potentially_hazardous_asteroid,
-                    details_json = EXCLUDED.details_json
-                """
+    # Explicit SQL types are important here: pandas otherwise infers
+    # ``close_approach_date`` from the NASA string as TEXT.  PostgreSQL then
+    # rejects the INSERT into the DATE column in the target table.
+    staging_types = {
+        "id": SqlText(),
+        "name": SqlText(),
+        "close_approach_date": Date(),
+        "absolute_magnitude_h": Float(),
+        "relative_velocity_km_s": Float(),
+        "miss_distance_km": Float(),
+        "alert_tag": SqlText(),
+        "is_potentially_hazardous_asteroid": Boolean(),
+        "details_json": SqlText(),
+    }
+    dataframe.to_sql(
+        staging,
+        connection,
+        schema="public",
+        if_exists="replace",
+        index=False,
+        method="multi",
+        dtype=staging_types,
+    )
+    connection.execute(
+        text(
+            f"""
+            INSERT INTO public.{MONITORING_TABLE} (
+                id, name, close_approach_date, absolute_magnitude_h,
+                relative_velocity_km_s, miss_distance_km, alert_tag,
+                is_potentially_hazardous_asteroid, details_json
             )
+            SELECT id, name, CAST(close_approach_date AS DATE), absolute_magnitude_h,
+                   relative_velocity_km_s, miss_distance_km, alert_tag,
+                   is_potentially_hazardous_asteroid,
+                   CAST(details_json AS JSONB)
+            FROM public."{staging}"
+            ON CONFLICT (id, close_approach_date) DO UPDATE SET
+                name = EXCLUDED.name,
+                absolute_magnitude_h = EXCLUDED.absolute_magnitude_h,
+                relative_velocity_km_s = EXCLUDED.relative_velocity_km_s,
+                miss_distance_km = EXCLUDED.miss_distance_km,
+                alert_tag = EXCLUDED.alert_tag,
+                is_potentially_hazardous_asteroid = EXCLUDED.is_potentially_hazardous_asteroid,
+                details_json = EXCLUDED.details_json
+            """
         )
-        return len(dataframe)
-    finally:
-        connection.execute(text(f'DROP TABLE IF EXISTS public."{staging}"'))
+    )
+    # Keep cleanup in the same successful transaction. If an earlier
+    # statement fails, the transaction is rolled back and PostgreSQL removes
+    # the temporary staging table automatically; attempting DROP on the
+    # aborted transaction only masks the original error.
+    connection.execute(text(f'DROP TABLE IF EXISTS public."{staging}"'))
+    return len(dataframe)
 
 
 def process_silver_gold(**context: Any) -> int:

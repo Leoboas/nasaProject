@@ -55,6 +55,14 @@ def filter_alerts(df: pd.DataFrame) -> pd.DataFrame:
         return df
     monitored = df.copy()
 
+    # Keep the contract with PostgreSQL explicit.  NASA returns ISO-8601
+    # strings, while the target schema uses a DATE primary-key component.
+    monitored["close_approach_date"] = pd.to_datetime(
+        monitored["close_approach_date"], errors="coerce"
+    ).dt.date
+    if monitored["close_approach_date"].isna().any():
+        raise ValueError("close_approach_date contem valor invalido")
+
     def _tag(row):
         name = str(row.get("name", "")).lower()
         tags = []
