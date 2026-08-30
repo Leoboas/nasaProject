@@ -1,0 +1,134 @@
+name: nasa-etl-runtime
+
+x-default-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-airflow-environment: &airflow-environment
+  TZ: ${TZ:-America/Manaus}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  PYTHONPATH: /opt/airflow:/opt/airflow/plugins
+  NASA_API_KEY: ${NASA_API_KEY:?defina NASA_API_KEY no arquivo de ambiente}
+  NASA_API_BASE: ${NASA_API_BASE:-https://api.nasa.gov}
+  NASA_API_RESOURCE: ${NASA_API_RESOURCE:-neo/rest/v1/feed}
+  # Immutable project target: the local nasa-etl-runtime PostgreSQL service.
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: "5432"
+  POSTGRES_DB: ${POSTGRES_DB:?defina POSTGRES_DB no arquivo de ambiente}
+  POSTGRES_USER: ${POSTGRES_USER:?defina POSTGRES_USER no arquivo de ambiente}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no arquivo de ambiente}
+  AIRFLOW__CORE__EXECUTOR: LocalExecutor
+  AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+  AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
+  AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:?defina AIRFLOW_FERNET_KEY no arquivo de ambiente}
+  AIRFLOW__CORE__PARALLELISM: "2"
+  AIRFLOW__CORE__MAX_ACTIVE_TASKS_PER_DAG: "2"
+  AIRFLOW__SCHEDULER__PARSING_PROCESSES: "1"
+  AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_DB_USER:?defina AIRFLOW_DB_USER no arquivo de ambiente}:${AIRFLOW_DB_PASSWORD:?defina AIRFLOW_DB_PASSWORD no arquivo de ambiente}@airflow-db:5432/${AIRFLOW_DB_NAME:?defina AIRFLOW_DB_NAME no arquivo de ambiente}
+  AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY:?defina AIRFLOW_WEBSERVER_SECRET_KEY no arquivo de ambiente}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+  AWS_DEFAULT_REGION: ${AWS_DEFAULT_REGION:-us-east-2}
+  S3_BUCKET_NAME: ${S3_BUCKET_NAME:?defina S3_BUCKET_NAME no arquivo de ambiente}
+  S3_PREFIX: ${S3_PREFIX:-bronze}
+
+x-airflow-common: &airflow-common
+  build:
+    context: ../..
+    dockerfile: Dockerfile
+  image: nasa-etl-airflow:2.9.0
+  environment: *airflow-environment
+  volumes:
+    - /opt/nasa-etl/airflow/dags:/opt/airflow/dags:ro
+    - /var/lib/nasa-etl/airflow/logs:/opt/airflow/logs
+    - /opt/nasa-etl/airflow/plugins:/opt/airflow/plugins:ro
+    - /var/lib/nasa-etl/airflow/data:/opt/airflow/data
+  restart: unless-stopped
+  security_opt:
+    - no-new-privileges:true
+  logging: *default-logging
+
+services:
+  # Reuse the already-running target database and its nasa-etl-runtime volume.
+  postgres:
+    extends:
+      file: docker-compose.ec2.yml
+      service: postgres
+
+  airflow-db:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ${AIRFLOW_DB_USER:?defina AIRFLOW_DB_USER no arquivo de ambiente}
+      POSTGRES_PASSWORD: ${AIRFLOW_DB_PASSWORD:?defina AIRFLOW_DB_PASSWORD no arquivo de ambiente}
+      POSTGRES_DB: ${AIRFLOW_DB_NAME:?defina AIRFLOW_DB_NAME no arquivo de ambiente}
+    volumes:
+      - airflow_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging: *default-logging
+
+  airflow-init:
+    <<: *airflow-common
+    restart: "no"
+    environment:
+      <<: *airflow-environment
+      AIRFLOW_ADMIN_USER: ${AIRFLOW_ADMIN_USER:?defina AIRFLOW_ADMIN_USER no arquivo de ambiente}
+      AIRFLOW_ADMIN_PASSWORD: ${AIRFLOW_ADMIN_PASSWORD:?defina AIRFLOW_ADMIN_PASSWORD no arquivo de ambiente}
+      AIRFLOW_ADMIN_EMAIL: ${AIRFLOW_ADMIN_EMAIL:?defina AIRFLOW_ADMIN_EMAIL no arquivo de ambiente}
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    command:
+      - bash
+      - -ec
+      - |
+        airflow db migrate
+        airflow users create \
+          --username "$${AIRFLOW_ADMIN_USER}" \
+          --password "$${AIRFLOW_ADMIN_PASSWORD}" \
+          --firstname NASA \
+          --lastname Admin \
+          --role Admin \
+          --email "$${AIRFLOW_ADMIN_EMAIL}" || true
+
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+
+  airflow-webserver:
+    <<: *airflow-common
+    command: webserver
+    ports:
+      - "${AIRFLOW_HOST_BIND:-127.0.0.1}:8080:8080"
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      airflow-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+volumes:
+  postgres_data:
+    name: nasa-etl-runtime_postgres_data
+  airflow_postgres_data:
+    name: nasa-etl-runtime_airflow_postgres_data
