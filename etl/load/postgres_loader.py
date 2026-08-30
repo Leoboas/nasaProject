@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import date, datetime
+
 import pandas as pd
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
@@ -27,6 +29,14 @@ class PostgresLoader:
         )
 
     def load_dataframe(self, dataframe: pd.DataFrame) -> int:
+        """Upsert a transformed batch into the monitoring table.
+
+        Args:
+            dataframe: Dataframe containing the canonical monitoring columns.
+
+        Returns:
+            Number of rows submitted to PostgreSQL. Empty batches are no-ops.
+        """
         if dataframe.empty:
             logger.info("DataFrame vazio; nada a carregar.")
             return 0
@@ -63,9 +73,9 @@ class PostgresLoader:
     def record_run(
         self,
         *,
-        run_date,
-        started_at,
-        finished_at,
+        run_date: date,
+        started_at: datetime,
+        finished_at: datetime,
         objects_received: int,
         alerts_loaded: int,
         status: str = "success",

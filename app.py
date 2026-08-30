@@ -320,6 +320,15 @@ def _diameter_m(details: Any) -> float | None:
 
 
 def _kinetic_energy_mt(diameter_m: float, velocity_km_s: float) -> float:
+    """Estimate impact energy from spherical diameter and relative speed.
+
+    Args:
+        diameter_m: Estimated object diameter in metres.
+        velocity_km_s: Relative velocity in kilometres per second.
+
+    Returns:
+        Theoretical kinetic energy expressed as megatons of TNT.
+    """
     radius_m = diameter_m / 2.0
     volume_m3 = (4.0 / 3.0) * math.pi * radius_m**3
     mass_kg = ROCK_DENSITY_KG_M3 * volume_m3
@@ -370,6 +379,15 @@ def _torino_proxy(probability: float, energy_mt: float) -> int:
 
 
 def prepare_data(frame: pd.DataFrame) -> pd.DataFrame:
+    """Build dashboard features from the persisted monitoring dataframe.
+
+    Args:
+        frame: Raw rows loaded from ``asteroides_monitoria``.
+
+    Returns:
+        A copy enriched with physical metrics, risk labels and Isolation Forest
+        anomaly scores. Missing source values remain explicitly null.
+    """
     if frame.empty:
         return frame.copy()
     data = frame.copy()
@@ -542,6 +560,11 @@ def render_charts(data: pd.DataFrame) -> None:
 
 
 def render_anomalies(data: pd.DataFrame) -> None:
+    """Render the statistical anomaly panel for the current filtered batch.
+
+    Args:
+        data: Feature-enriched dataframe returned by :func:`prepare_data`.
+    """
     st.subheader("🛸 Objetos atípicos · Alerta de Anomalia Orbital")
     if data["is_anomaly"].sum() == 0:
         if len(data) < 5:

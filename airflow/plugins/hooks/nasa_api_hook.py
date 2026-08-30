@@ -24,6 +24,18 @@ class NASAApiHook(BaseHook):
         self.http_hook = HttpHook(method="GET", http_conn_id=self.http_conn_id)
 
     def get_neo_feed(self, start_date: dt.date, end_date: dt.date | None = None) -> dict[str, Any]:
+        """Call NASA NeoWS through the configured Airflow HTTP connection.
+
+        Args:
+            start_date: First date included in the feed.
+            end_date: Last date included; defaults to ``start_date``.
+
+        Returns:
+            Decoded JSON payload from NASA.
+
+        Raises:
+            AirflowException: If the HTTP request or JSON decoding fails.
+        """
         config = get_nasa_config()
         end = end_date or start_date
         params = {

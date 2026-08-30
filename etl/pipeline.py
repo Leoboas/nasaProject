@@ -10,7 +10,9 @@ import datetime as dt
 import json
 import os
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
+
+import pandas as pd
 
 from etl.common.logging_config import get_logger
 from etl.extract.nasa_client import NASAClient
@@ -24,14 +26,16 @@ DEFAULT_ARTIFACT_RETENTION_DAYS = 90
 class NASAFeedClient(Protocol):
     """Contrato mínimo para permitir testes sem chamada externa."""
 
-    def fetch_neo_feed(self, start_date: dt.date, end_date: dt.date | None = None) -> dict:
+    def fetch_neo_feed(
+        self, start_date: dt.date, end_date: dt.date | None = None
+    ) -> dict[str, Any]:
         ...
 
 
 class DataFrameLoader(Protocol):
     """Contrato mínimo para permitir testes sem PostgreSQL."""
 
-    def load_dataframe(self, dataframe) -> int:
+    def load_dataframe(self, dataframe: pd.DataFrame) -> int:
         ...
 
 
@@ -81,10 +85,19 @@ def run_daily_etl(
     loader: DataFrameLoader | None = None,
     retention_days: int | None = None,
 ) -> int:
-    """Extrai, filtra, persiste artefatos e faz upsert dos alertas.
+    """Execute one idempotent NASA extraction and load cycle.
 
-    O retorno é a quantidade de registros enviados ao storage. A função é
-    idempotente no PostgreSQL porque o loader usa a chave (id, data).
+    Args:
+        run_date: Date sent to the NASA API. Defaults to the current date.
+        data_dir: Root directory for local raw and processed artifacts.
+        client: Optional API client implementation for dependency injection.
+        loader: Optional database loader implementation for tests.
+        retention_days: Number of days to retain local artifacts.
+
+    Returns:
+        Number of records written by the loader.
+
+    The PostgreSQL upsert key ``(id, close_approach_date)`` makes reruns safe.
     """
 
     started_at = dt.datetime.now(dt.timezone.utc)

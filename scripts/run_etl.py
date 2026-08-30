@@ -18,6 +18,7 @@ from etl.pipeline import run_daily_etl
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse command-line options for the lightweight daily runner."""
     parser = argparse.ArgumentParser(description="Executa uma coleta NASA NEO.")
     parser.add_argument(
         "--date",
@@ -32,6 +33,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Run one ETL cycle and return a process exit code."""
     args = parse_args()
     loaded = run_daily_etl(run_date=args.date, data_dir=args.data_dir)
     print(f"ETL concluído. Registros carregados: {loaded}")

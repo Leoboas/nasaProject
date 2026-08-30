@@ -1,12 +1,21 @@
 import json
+from typing import Any
 
 import pandas as pd
 
 from etl.common.schemas import ASTEROID_COLUMNS
 
 
-def normalize_neo_feed(raw: dict) -> pd.DataFrame:
-    """Normalize the NASA NEO feed into one row per close approach."""
+def normalize_neo_feed(raw: dict[str, Any]) -> pd.DataFrame:
+    """Normalize the NASA NEO feed into one row per close approach.
+
+    Args:
+        raw: JSON-decoded payload returned by the NASA NeoWS feed.
+
+    Returns:
+        A dataframe with the canonical asteroid columns and the original
+        object payload in ``raw`` for auditability.
+    """
     records = []
     neo_data = raw.get("near_earth_objects", {})
     for date_str, asteroids in neo_data.items():
@@ -37,7 +46,8 @@ def normalize_neo_feed(raw: dict) -> pd.DataFrame:
     return pd.DataFrame(records, columns=ASTEROID_COLUMNS + ["raw"])
 
 
-def _safe_float(value):
+def _safe_float(value: Any) -> float | None:
+    """Convert an API value to ``float`` without failing the whole batch."""
     try:
         return float(value)
     except (TypeError, ValueError):
@@ -50,6 +60,15 @@ def filter_alerts(df: pd.DataFrame) -> pd.DataFrame:
     Tags distinguish potentially hazardous, ATLAS, 3I and routine objects.
     Official impact probabilities still require orbital solutions such as JPL
     Sentry and are not inferred by this ETL.
+
+    Args:
+        df: Normalized dataframe produced by :func:`normalize_neo_feed`.
+
+    Returns:
+        Dataframe ready for persistence, including business alert tags.
+
+    Raises:
+        ValueError: If a non-empty batch contains an invalid approach date.
     """
     if df.empty:
         return df

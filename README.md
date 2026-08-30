@@ -1,94 +1,92 @@
 # NASA NEO Mission Control
 
-[![Python 3.11](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white)](https://www.python.org/)
+[![AWS S3](https://img.shields.io/badge/AWS-S3%20Bronze-569A31?logo=amazons3&logoColor=white)](https://aws.amazon.com/s3/)
 [![Apache Airflow](https://img.shields.io/badge/Apache%20Airflow-2.9-017CEE?logo=apacheairflow&logoColor=white)](https://airflow.apache.org/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-15%2B-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Docker](https://img.shields.io/badge/Docker%20Compose-2496ED?logo=docker&logoColor=white)](https://docs.docker.com/compose/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-Cloud-FF4B4B?logo=streamlit&logoColor=white)](https://streamlit.io/cloud)
-[![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)](https://www.docker.com/)
 
-**Dashboard ao vivo:** [nasaetl.streamlit.app](https://nasaetl.streamlit.app/)
+## Dashboard ao vivo
 
-## Visão geral
+### [Abrir o NASA NEO Mission Control](https://nasaetl.streamlit.app/)
 
-O NASA NEO Mission Control é um projeto de Engenharia de Dados voltado ao monitoramento de objetos próximos à Terra (Near-Earth Objects, NEOs). O pipeline consulta a API NASA NeoWS, normaliza o payload, seleciona eventos relevantes e persiste uma visão analítica idempotente no PostgreSQL. Um dashboard Streamlit apresenta KPIs, filtros, visualizações e exportação CSV em modo somente leitura.
-
-O objetivo de negócio é transformar o feed público da NASA em uma base confiável e atualizável para análise de risco, priorizando asteroides potencialmente perigosos e ocorrências relacionadas a `Atlas` ou `3I`.
+Pipeline diário para monitorar objetos próximos à Terra (NEOs), preservar o
+payload original e entregar uma camada analítica auditável para o dashboard.
 
 ## Arquitetura
 
 ```mermaid
 flowchart LR
-    NASA[NASA NeoWS API] --> EXTRACT[Extract\nHTTP com timeout]
-    EXTRACT --> AIRFLOW[Pipeline ETL\nApache Airflow + Docker\nAWS EC2]
-    AIRFLOW --> TRANSFORM[Transform\nNormalização e regras de alerta]
-    TRANSFORM --> DB[(PostgreSQL\nasteroides_monitoria)]
-    DB --> DASH[Streamlit Community Cloud\nDashboard de leitura]
+    NASA[NASA NeoWS API] -->|JSON diário| INGEST[Airflow DAG<br/>Ingestão Bronze]
+    INGEST -->|raw_nasa_data_YYYYMMDD.json| S3[(Amazon S3<br/>Camada Bronze)]
+    S3 -->|download| PROC[Processamento<br/>Pandas + regras]
+    PROC --> ML[Features físicas<br/>+ Isolation Forest]
+    ML --> PG[(PostgreSQL local<br/>Silver/Gold)]
+    PG --> DASH[Streamlit Cloud<br/>Dashboard somente leitura]
+    INGEST --> OBS[etl_runs<br/>linhagem e status]
+    OBS --> PG
 ```
 
-Na EC2, o repositório também disponibiliza um runner Python leve acionado por `systemd` para ambientes com pouca memória. Ele reutiliza o mesmo núcleo de ETL e o mesmo contrato de dados do fluxo Airflow/Docker.
+O Airflow usa `LocalExecutor`. O PostgreSQL analítico é o container local da
+EC2 (`postgres`); o Airflow mantém um banco de metadados separado.
 
-## Stack tecnológico
+## Camadas de dados
 
-| Camada | Tecnologia | Responsabilidade |
-|---|---|---|
-| Fonte | NASA NeoWS API | Feed diário de objetos próximos à Terra |
-| Orquestração | Apache Airflow + Docker | Agenda, execução e observabilidade local do ETL |
-| Compute | AWS EC2 | Hospedagem do pipeline e do PostgreSQL operacional |
-| Persistência | PostgreSQL | UPSERT idempotente da tabela analítica |
-| Transformação | Python 3.11, Pandas, SQLAlchemy | Normalização, filtros de alerta e carga |
-| Visualização | Streamlit Cloud + Plotly | KPIs, gráficos, filtros e download CSV |
-| Infraestrutura | Terraform, Docker Compose, systemd | Provisionamento e operação reproduzível |
+- **Bronze:** JSON original da NASA, particionado por data no S3 e protegido com SSE-S3.
+- **Silver:** registros normalizados com datas, tipos e unidades padronizados.
+- **Gold:** `public.asteroides_monitoria`, carregada via UPSERT pela chave
+  `(id, close_approach_date)`.
+- **Observabilidade:** `public.etl_runs` registra volume, duração e status.
 
-## Estrutura do repositório
+## FinOps e arquitetura sustentável
+
+A solução foi desenhada para instâncias pequenas e ambientes Free Tier:
+
+- `LocalExecutor`, sem Celery nem workers adicionais.
+- Concorrência e pool de conexões limitados.
+- JSON bruto no S3 para evitar crescimento do disco da EC2.
+- Retenção configurável de artefatos locais.
+- Execução diária em vez de polling contínuo.
+
+## Estrutura
 
 ```text
 .
 ├── app.py                         # Dashboard Streamlit
-├── etl/                           # Núcleo de extract, transform e load
-├── airflow/                       # DAG, hooks e operators do Airflow
-├── db/migrations/                 # Schema PostgreSQL versionado
-├── deploy/                        # Docker Compose e unidades systemd da EC2
-├── infra/ec2/                     # Módulo Terraform canônico para EC2
-├── infra/ec2-education/           # Variante para contas AWS Education
-├── infra/terraform/               # Módulo RDS/S3 de compatibilidade
-├── tests/                         # Testes unitários do ETL
-├── requirements.txt               # Dependências mínimas do Streamlit Cloud
-├── requirements.runtime.txt       # Dependências do runner leve
-└── requirements-dev.txt           # Airflow e ferramentas de teste
+├── etl/                           # Extract, Transform e Load
+├── airflow/dags/                  # NASA -> S3 -> PostgreSQL
+├── airflow/plugins/               # Hooks e Operators
+├── db/migrations/                 # Migrações versionadas
+├── deploy/compose/                # Compose da EC2
+├── deploy/systemd/                # Timer alternativo
+├── infra/ec2/                     # Terraform
+├── tests/                         # Testes unitários
+├── requirements.txt               # Dashboard
+└── requirements.airflow.txt       # Airflow
 ```
-
-`infra/ec2` é a referência para uma nova implantação em EC2. Os módulos `ec2-education` e `terraform` atendem cenários de infraestrutura distintos já existentes; revise o plano Terraform antes de aplicá-los.
-
-## Modelo de dados
-
-O dashboard consulta exclusivamente `asteroides_monitoria`. A chave composta evita duplicidade ao reprocessar a mesma aproximação.
-
-| Coluna | Tipo | Descrição |
-|---|---|---|
-| `id` | `TEXT` | Identificador da NASA; parte da chave primária |
-| `close_approach_date` | `DATE` | Data da aproximação; parte da chave primária |
-| `name` | `TEXT` | Nome do objeto |
-| `absolute_magnitude_h` | `DOUBLE PRECISION` | Magnitude absoluta |
-| `relative_velocity_km_s` | `DOUBLE PRECISION` | Velocidade relativa em km/s |
-| `miss_distance_km` | `DOUBLE PRECISION` | Distância mínima estimada em km |
-| `alert_tag` | `TEXT` | Tags de negócio: `hazard`, `atlas` e/ou `3i` |
-| `is_potentially_hazardous_asteroid` | `BOOLEAN` | Sinalizador oficial de risco da NASA |
-| `details_json` | `JSONB` | Payload selecionado para auditoria e métricas derivadas |
-| `created_at` | `TIMESTAMPTZ` | Momento de inserção do registro |
-
-Há índices para consulta por data de aproximação e para eventos classificados como perigosos.
 
 ## Execução local
 
-### 1. Preparar variáveis locais
+Copie o template e preencha somente valores locais:
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Edite o `.env` com uma chave válida da NASA e credenciais locais do PostgreSQL. O arquivo é ignorado pelo Git. Para desenvolvimento do dashboard diretamente no host, mantenha `POSTGRES_HOST=localhost`; o Compose publica o banco apenas em `127.0.0.1:5432`.
+Para containers, mantenha `POSTGRES_HOST=postgres`:
 
-### 2. Subir PostgreSQL e Airflow em Docker
+```dotenv
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+POSTGRES_DB=nasa_etl
+POSTGRES_USER=nasa_app
+POSTGRES_PASSWORD=uma-senha-local
+AWS_DEFAULT_REGION=us-east-2
+S3_BUCKET_NAME=seu-bucket-bronze
+```
+
+Suba os serviços:
 
 ```powershell
 docker compose up -d --build
@@ -96,14 +94,9 @@ docker compose ps
 docker compose logs -f airflow-scheduler
 ```
 
-O Airflow fica disponível apenas em `http://127.0.0.1:8080`. Para executar somente o banco e testar o runner leve:
+O Airflow local fica em `http://127.0.0.1:8080`.
 
-```powershell
-docker compose up -d postgres
-docker compose --profile runner run --rm runner
-```
-
-### 3. Rodar o dashboard
+Execute o dashboard:
 
 ```powershell
 py -3.11 -m venv .venv
@@ -113,80 +106,44 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-O dashboard aceita as variáveis `POSTGRES_*` do `.env` local. Em produção, os valores dos Secrets `DB_*` têm prioridade.
-
-### Separação EC2 × RDS
-
-Este projeto de demonstração usa o PostgreSQL do Compose na EC2 (`POSTGRES_HOST=postgres` dentro dos containers). O módulo `infra/terraform` provisiona um RDS independente para outro projeto e não deve ser usado como destino do ETL desta aplicação. No Streamlit Cloud, configure `DB_HOST` com o endereço público controlado da EC2 (ou um proxy seguro), nunca com o endpoint do RDS do outro projeto. Se os Secrets apontarem para o RDS, o dashboard poderá conectar normalmente e ainda assim exibir zero registros, pois serão bancos diferentes.
-
-### 4. Executar testes do ETL
-
-Em Linux, macOS ou Docker, instale o ambiente de desenvolvimento respeitando as constraints do Airflow:
+Teste o código:
 
 ```bash
-python -m pip install --upgrade pip
-pip install --constraint https://raw.githubusercontent.com/apache/airflow/constraints-2.9.0/constraints-3.11.txt -r requirements-dev.txt
-pytest
+python -m pip install -r requirements-dev.txt
+pytest -q
 ```
 
-No Windows, os testes de plugins Airflow são ignorados porque o Airflow não possui suporte nativo à plataforma. O restante da suíte permanece executável.
+## Operação na AWS EC2
 
-## Publicação no Streamlit Community Cloud
+Use somente o overlay de produção:
 
-O `requirements.txt` da raiz é deliberadamente enxuto e contém somente as dependências do dashboard:
-
-```text
-streamlit>=1.36.0
-pandas>=2.2.0
-psycopg2-binary>=2.9.9
-sqlalchemy>=2.0.0
-plotly>=5.22.0
-python-dotenv>=1.0.0
+```bash
+sudo docker compose \
+  --env-file /etc/nasa-etl/nasa-etl.env \
+  -f /opt/nasa-etl/deploy/compose/docker-compose.airflow.ec2.yml \
+  up -d --build
 ```
 
-No painel da aplicação Streamlit, abra **Settings → Secrets** e cadastre TOML de nível superior neste formato:
+Validação:
 
-```toml
-DB_HOST = "postgres.example.com"
-DB_PORT = 5432
-DB_NAME = "nasa_etl"
-DB_USER = "streamlit_readonly"
-DB_PASSWORD = "substitua-por-uma-senha-rotacionada"
-
-# Inclua apenas quando o servidor PostgreSQL exigir TLS.
-DB_SSLMODE = "require"
+```bash
+sudo docker ps
+sudo docker exec nasa-etl-runtime-airflow-scheduler-1 airflow dags list
+sudo systemctl is-active nasa-etl.timer
+free -h
 ```
 
-Não inclua cabeçalhos como `[database]`: o dashboard usa as chaves `DB_*` no nível raiz. Após salvar os Secrets, reinicie a aplicação se necessário. O arquivo local `.streamlit/secrets.toml` também deve permanecer fora do Git.
+Ative apenas um agendador (Airflow ou systemd) para evitar coletas duplicadas.
 
-> Segurança: o Streamlit Cloud precisa alcançar o PostgreSQL por uma rota de rede controlada. Em produção, use TLS e restrinja o acesso no firewall ou em um proxy de banco. Nunca publique credenciais, state Terraform, arquivos `.env` ou a porta PostgreSQL sem controles de rede.
+## Segurança e confiabilidade
 
-## Implantação na AWS EC2
-
-O módulo [`infra/ec2`](infra/ec2) provisiona uma EC2 Ubuntu com IMDSv2, disco criptografado, role SSM e SSH restrito ao CIDR administrativo.
-
-```powershell
-Copy-Item infra/ec2/terraform.tfvars.example infra/ec2/terraform.tfvars
-# Edite key_pair_name, admin_cidr e repository_ref.
-terraform -chdir=infra/ec2 init
-terraform -chdir=infra/ec2 plan
-terraform -chdir=infra/ec2 apply
-```
-
-Depois do bootstrap, armazene o ambiente operacional em `/etc/nasa-etl/nasa-etl.env` com permissões `600`, fora do repositório. O timer `nasa-etl.timer` agenda o job diário e o serviço `nasa-etl.service` executa o container do ETL.
-
-O job aplica as migrations idempotentes antes de cada coleta. Isso é importante para volumes PostgreSQL já existentes: a tabela `public.etl_runs` foi adicionada depois da primeira versão e não é recriada automaticamente pelo entrypoint do Docker em um volume persistente.
-
-## Qualidade e confiabilidade
-
-- Timeouts explícitos e propagação de erro para chamadas da API NASA.
-- Transformação determinística e regras de alerta testáveis.
-- UPSERT por `(id, close_approach_date)` para reprocessamento seguro.
-- Senhas convertidas com `SQLAlchemy.URL.create`, sem interpolação manual de URL.
-- Pools de conexão reduzidos e `pool_pre_ping` no dashboard Streamlit.
-- Estados claros para banco indisponível, tabela vazia, filtros sem resultados e dados incompletos.
-- CI separada: validação leve do dashboard e suíte Airflow/ETL com constraints compatíveis.
+- Credenciais são injetadas por ambiente e nunca ficam no Git.
+- O dashboard usa usuário de leitura e cache de cinco minutos.
+- O bucket S3 permanece privado e criptografado.
+- Timeouts, retries e `pool_pre_ping` evitam falhas silenciosas.
+- UPSERT torna o reprocessamento idempotente.
+- Métricas físicas e anomalias são análises, não previsões oficiais de impacto.
 
 ## Licença
 
-Distribuído sob a licença presente em [LICENSE](LICENSE).
+Consulte [LICENSE](LICENSE).

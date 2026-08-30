@@ -27,6 +27,19 @@ class NASAClient:
         self.resource = (resource or config.resource).lstrip("/")
 
     def fetch_neo_feed(self, start_date: dt.date, end_date: dt.date | None = None) -> dict[str, Any]:
+        """Fetch a bounded date range from the NASA NEO Feed.
+
+        Args:
+            start_date: First date included in the NASA request.
+            end_date: Last date included; defaults to ``start_date``.
+
+        Returns:
+            The decoded JSON payload returned by NASA.
+
+        Raises:
+            requests.RequestException: If the request fails or times out.
+            ValueError: If NASA returns invalid JSON.
+        """
         end = end_date or start_date
         params = {
             "start_date": start_date.isoformat(),
