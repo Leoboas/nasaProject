@@ -803,9 +803,9 @@ def _apply_plotly_theme(figure: go.Figure) -> go.Figure:
     if figure.layout.scene:
         figure.update_layout(
             scene={
-                "xaxis": {"backgroundcolor": "#0b1220", "gridcolor": "#334155", "tickfont": {"color": "#e2e8f0"}, "titlefont": {"color": "#f8fafc"}},
-                "yaxis": {"backgroundcolor": "#0b1220", "gridcolor": "#334155", "tickfont": {"color": "#e2e8f0"}, "titlefont": {"color": "#f8fafc"}},
-                "zaxis": {"backgroundcolor": "#0b1220", "gridcolor": "#334155", "tickfont": {"color": "#e2e8f0"}, "titlefont": {"color": "#f8fafc"}},
+                "xaxis": {"backgroundcolor": "#0b1220", "gridcolor": "#334155", "tickfont": {"color": "#e2e8f0"}, "title": {"font": {"color": "#f8fafc", "size": 13}}},
+                "yaxis": {"backgroundcolor": "#0b1220", "gridcolor": "#334155", "tickfont": {"color": "#e2e8f0"}, "title": {"font": {"color": "#f8fafc", "size": 13}}},
+                "zaxis": {"backgroundcolor": "#0b1220", "gridcolor": "#334155", "tickfont": {"color": "#e2e8f0"}, "title": {"font": {"color": "#f8fafc", "size": 13}}},
             }
         )
     return figure
