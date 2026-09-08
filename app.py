@@ -556,7 +556,7 @@ def render_charts(data: pd.DataFrame) -> None:
                 template="plotly_dark",
             )
             figure.update_layout(height=430, margin=dict(l=10, r=10, t=20, b=10), legend_title_text="")
-            st.plotly_chart(figure, use_container_width=True)
+            st.plotly_chart(_apply_plotly_theme(figure), use_container_width=True)
     with right:
         st.subheader("📆 Aproximações por data")
         counts = data.groupby(data["close_approach_date"].dt.date).size().reset_index(name="total")
@@ -566,7 +566,7 @@ def render_charts(data: pd.DataFrame) -> None:
             counts.columns = ["data", "total"]
             figure = px.bar(counts, x="data", y="total", color="total", color_continuous_scale="Tealgrn", template="plotly_dark", labels={"data": "Data", "total": "Aproximações"})
             figure.update_layout(height=430, margin=dict(l=10, r=10, t=20, b=10), coloraxis_showscale=False)
-            st.plotly_chart(figure, use_container_width=True)
+            st.plotly_chart(_apply_plotly_theme(figure), use_container_width=True)
 
 
 def render_anomalies(data: pd.DataFrame) -> None:
@@ -649,7 +649,7 @@ def render_orbital_radar(data: pd.DataFrame) -> None:
         route_legend = False
         figure.add_trace(go.Scatter3d(x=[EARTH_HELIOCENTRIC_AU[0], closest[0]], y=[EARTH_HELIOCENTRIC_AU[1], closest[1]], z=[EARTH_HELIOCENTRIC_AU[2], closest[2]], mode="lines+markers", line={"color": "#94a3b8", "width": 1, "dash": "dot"}, marker={"size": 2, "color": "#f8fafc"}, name="Distância à Terra", showlegend=False, hovertemplate=f"{asteroid['name']}<br>Ponto de máxima aproximação (projeção)<extra></extra>"))
     figure.update_layout(template="plotly_dark", height=650, scene={"xaxis_title": "X heliocêntrico (AU)", "yaxis_title": "Y heliocêntrico (AU)", "zaxis_title": "Z / inclinação (AU)", "aspectmode": "data"}, margin=dict(l=0, r=0, t=20, b=0))
-    st.plotly_chart(figure, use_container_width=True)
+    st.plotly_chart(_apply_plotly_theme(figure), use_container_width=True)
     st.caption("Sol na origem e Terra em 1 AU; cada tracejado é uma rota de triagem tangente à Terra, ancorada na distância escalar da API. Sem efemérides, vetor orbital e covariância, não representa a rota real nem confirma colisão.")
 
 
@@ -696,7 +696,7 @@ def render_impact_simulator(sentry: pd.DataFrame) -> None:
                 figure = go.Figure()
                 figure.add_trace(go.Scattergeo(lat=[latitude], lon=[longitude], mode="markers+text", text=["Subponto nominal JPL"], textposition="top center", marker={"size": 12, "color": "#fb7185" if nominal_collision else "#38bdf8"}, name="Subponto nominal", hovertemplate=f"Lat: {latitude:.3f}°<br>Lon: {longitude:.3f}°<br>Raio nominal: {radius_km:,.0f} km<extra></extra>"))
                 figure.update_layout(template="plotly_dark", height=480, geo={"showland": True, "landcolor": "#172033", "showocean": True, "oceancolor": "#071426", "projection_type": "equirectangular"}, margin=dict(l=0, r=0, t=20, b=0))
-                st.plotly_chart(figure, use_container_width=True)
+                st.plotly_chart(_apply_plotly_theme(figure), use_container_width=True)
                 if nominal_collision:
                     st.success(f"A órbita nominal interpolada cruza a esfera atmosférica. Subponto calculado: {latitude:.3f}°, {longitude:.3f}°.")
                 else:
@@ -734,6 +734,7 @@ def main() -> None:
     st.markdown('<div class="mission-title">Mission Control · Asteroid Monitor</div>', unsafe_allow_html=True)
     st.markdown('<div class="mission-subtitle">Sinais de aproximação, risco, física espacial e operação autônoma do pipeline.</div>', unsafe_allow_html=True)
     st.markdown('<span class="arch-badge">AWS EC2 • Docker • PostgreSQL • Systemd • Airflow • Streamlit</span>', unsafe_allow_html=True)
+    _render_accessible_theme()
     try:
         raw = load_data()
         runs = load_pipeline_runs()
@@ -772,6 +773,87 @@ def main() -> None:
         render_impact_simulator(sentry)
     st.divider()
     render_table(filtered)
+
+
+def _apply_plotly_theme(figure: go.Figure) -> go.Figure:
+    """Apply high-contrast colors to axes, legends and 3D scenes."""
+
+    figure.update_layout(
+        template="plotly_dark",
+        paper_bgcolor="#0b1220",
+        plot_bgcolor="#101b2d",
+        font={"family": "Inter, Segoe UI, sans-serif", "color": "#f8fafc", "size": 13},
+        legend={"font": {"color": "#f8fafc", "size": 12}},
+        colorway=["#67e8f9", "#fbbf24", "#fb7185", "#a78bfa", "#34d399"],
+    )
+    figure.update_xaxes(
+        title_font={"color": "#f8fafc", "size": 13},
+        tickfont={"color": "#e2e8f0", "size": 11},
+        gridcolor="#334155",
+        zerolinecolor="#64748b",
+        linecolor="#64748b",
+    )
+    figure.update_yaxes(
+        title_font={"color": "#f8fafc", "size": 13},
+        tickfont={"color": "#e2e8f0", "size": 11},
+        gridcolor="#334155",
+        zerolinecolor="#64748b",
+        linecolor="#64748b",
+    )
+    if figure.layout.scene:
+        figure.update_layout(
+            scene={
+                "xaxis": {"backgroundcolor": "#0b1220", "gridcolor": "#334155", "tickfont": {"color": "#e2e8f0"}, "titlefont": {"color": "#f8fafc"}},
+                "yaxis": {"backgroundcolor": "#0b1220", "gridcolor": "#334155", "tickfont": {"color": "#e2e8f0"}, "titlefont": {"color": "#f8fafc"}},
+                "zaxis": {"backgroundcolor": "#0b1220", "gridcolor": "#334155", "tickfont": {"color": "#e2e8f0"}, "titlefont": {"color": "#f8fafc"}},
+            }
+        )
+    return figure
+
+
+def _render_accessible_theme() -> None:
+    """Inject a high-contrast theme for text, controls and status messages."""
+
+    st.markdown(
+        """
+        <style>
+        :root { color-scheme: dark; }
+        .stApp { background: radial-gradient(circle at 15% 0%, #172554 0, #0b1120 38%, #050816 100%); color: #f8fafc; }
+        .block-container { max-width: 1500px; padding-top: 2rem; }
+        .stApp p, .stApp li, .stApp label, .stApp [data-testid="stMarkdownContainer"] { color: #e2e8f0 !important; }
+        .stApp h1, .stApp h2, .stApp h3, .stApp h4, .stApp h5, .stApp h6 { color: #ffffff !important; }
+        .mission-kicker { color: #67e8f9 !important; font-size: .78rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+        .mission-title { color: #ffffff !important; font-size: clamp(2rem, 5vw, 3.5rem); font-weight: 800; letter-spacing: -.04em; line-height: 1; margin: .35rem 0 .8rem; }
+        .mission-subtitle { color: #e2e8f0 !important; font-size: 1.05rem; margin-bottom: 1rem; }
+        .arch-badge { background: #12334a; border: 1px solid #67e8f9; border-radius: 999px; color: #e0f2fe !important; display: inline-block; font-size: .82rem; font-weight: 700; padding: .4rem .8rem; }
+        [data-testid="stSidebar"] { background: #0b1220; border-right: 1px solid #334155; }
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p, [data-testid="stSidebar"] label { color: #f1f5f9 !important; }
+        [data-testid="stMetric"] { background: #101b2d; border: 1px solid #475569; border-radius: 16px; padding: 1rem 1.1rem; box-shadow: 0 12px 30px rgba(0,0,0,.28); }
+        [data-testid="stMetricLabel"] { color: #cbd5e1 !important; font-weight: 700; }
+        [data-testid="stMetricValue"] { color: #ffffff !important; font-weight: 800; }
+        [data-testid="stMetricDelta"] { color: #a5f3fc !important; }
+        [data-testid="stCaptionContainer"] p { color: #cbd5e1 !important; }
+        [data-testid="stAlert"] { background: #16243a !important; border: 1px solid #64748b !important; color: #f8fafc !important; border-radius: 12px; }
+        [data-testid="stAlert"] p { color: #f8fafc !important; }
+        [data-testid="stAlert"] a { color: #67e8f9 !important; }
+        [data-baseweb="select"] > div, [data-baseweb="input"] > div { background: #111c2f !important; border-color: #64748b !important; color: #ffffff !important; }
+        [data-baseweb="select"] * { color: #ffffff !important; }
+        input, textarea { background: #111c2f !important; color: #ffffff !important; }
+        input::placeholder, textarea::placeholder { color: #94a3b8 !important; }
+        button[kind="secondary"], .stDownloadButton button { background: #12334a !important; border: 1px solid #67e8f9 !important; color: #ffffff !important; font-weight: 700; }
+        button[kind="secondary"]:hover, .stDownloadButton button:hover { background: #155e75 !important; color: #ffffff !important; }
+        .stTabs [data-baseweb="tab-list"] { gap: .35rem; border-bottom: 1px solid #475569; }
+        .stTabs [data-baseweb="tab"] { color: #cbd5e1 !important; font-weight: 700; }
+        .stTabs [aria-selected="true"] { color: #67e8f9 !important; border-bottom-color: #67e8f9 !important; }
+        [data-testid="stDataFrame"] { border: 1px solid #475569; border-radius: 10px; }
+        a { color: #67e8f9 !important; }
+        a:hover { color: #bae6fd !important; }
+        code { color: #bae6fd !important; background: #111c2f !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 
 if __name__ == "__main__":
