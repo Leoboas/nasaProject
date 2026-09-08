@@ -661,58 +661,162 @@ def _circle_geo(lat: float, lon: float, radius_km: float) -> tuple[list[float], 
 
 
 def render_impact_simulator(sentry: pd.DataFrame) -> None:
+    """Render the official Sentry event with readable risk and geometry sections."""
+
     st.subheader("💥 Eventos de impacto virtual · CNEOS Sentry")
+    st.caption("Risco oficial, geometria nominal e limites científicos da simulação em um único painel.")
+
     if sentry.empty:
         st.info("Não há eventos oficiais do Sentry disponíveis para simulação.")
         return
+
     options = sentry["des"].dropna().astype(str).tolist()
-    selected = st.selectbox("Objeto com evento Sentry", options, format_func=lambda value: f"{value} · {sentry.loc[sentry['des'].astype(str).eq(value), 'fullname'].iloc[0] if 'fullname' in sentry and not sentry.loc[sentry['des'].astype(str).eq(value), 'fullname'].empty else ''}")
+    with st.container(border=True):
+        selected = st.selectbox(
+            "Objeto com evento Sentry",
+            options,
+            format_func=lambda value: (
+                f"{value} · "
+                f"{sentry.loc[sentry['des'].astype(str).eq(value), 'fullname'].iloc[0]}"
+                if "fullname" in sentry
+                and not sentry.loc[sentry["des"].astype(str).eq(value), "fullname"].empty
+                else value
+            ),
+        )
+
     payload = load_sentry_object(selected)
     summary = payload.get("summary", {})
     events = pd.DataFrame(payload.get("data", []))
     if not summary:
         st.warning("O objeto deixou de estar no Sentry ou não há detalhes disponíveis neste momento.")
         return
+
     probability = pd.to_numeric(summary.get("ip"), errors="coerce")
-    torino = summary.get("ts_max", "0")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Probabilidade oficial", f"{probability:.6%}" if pd.notna(probability) else "N/D")
-    c2.metric("Torino oficial", str(torino))
-    c3.metric("Energia ponderada", f"{summary.get('energy', 'N/D')} MT")
-    c4.metric("Método", str(summary.get("method", "N/D")))
+    energy = pd.to_numeric(summary.get("energy"), errors="coerce")
+    torino = pd.to_numeric(summary.get("ts_max"), errors="coerce")
+    method = str(summary.get("method", "N/D"))
+
+    def format_probability(value: Any) -> str:
+        number = pd.to_numeric(value, errors="coerce")
+        if pd.isna(number):
+            return "N/D"
+        if number < 1e-6:
+            return "< 0,0001%"
+        return f"{number:.4%}"
+
+    def format_energy(value: Any) -> str:
+        number = pd.to_numeric(value, errors="coerce")
+        if pd.isna(number):
+            return "N/D"
+        if abs(number) < 1_000_000:
+            return f"{number:,.0f} MT"
+        return f"{number:,.3g} MT"
+
+    with st.container(border=True):
+        st.markdown("#### Resumo oficial do evento")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Probabilidade oficial", format_probability(probability))
+        c2.metric("Torino oficial", f"{torino:.0f}" if pd.notna(torino) else "N/D")
+        c3.metric("Energia ponderada", format_energy(energy))
+        c4.metric("Método", method)
+
+    st.caption("Valores oficiais publicados pelo CNEOS Sentry; a probabilidade não significa que um impacto seja esperado.")
+
     if events.empty:
         st.info("O Sentry reconhece o objeto, mas não retornou eventos virtuais detalhados.")
     else:
-        columns = [column for column in ("date", "ip", "energy", "ts", "ps", "sigma_vi", "dist", "width") if column in events]
-        st.dataframe(events[columns], use_container_width=True, hide_index=True)
+        st.markdown("#### Eventos virtuais registrados")
+        columns = [
+            column
+            for column in ("date", "ip", "energy", "ts", "ps", "sigma_vi", "dist", "width")
+            if column in events
+        ]
+        display = events[columns].copy()
+        display = display.rename(
+            columns={
+                "date": "Data",
+                "ip": "Probabilidade",
+                "energy": "Energia (MT)",
+                "ts": "Torino",
+                "ps": "Palermo",
+                "sigma_vi": "σ entrada",
+                "dist": "Distância",
+                "width": "Largura",
+            }
+        )
+        if "Probabilidade" in display:
+            display["Probabilidade"] = display["Probabilidade"].map(format_probability)
+        if "Energia (MT)" in display:
+            display["Energia (MT)"] = display["Energia (MT)"].map(format_energy)
+        st.dataframe(display, use_container_width=True, hide_index=True)
+
         event_options = events["date"].astype(str).tolist() if "date" in events else []
         if event_options:
-            event_date = st.selectbox("Evento virtual para calcular a geometria nominal", event_options)
-            try:
-                vector = load_horizons_vector(selected, event_date)
-                latitude, longitude, radius_km = _nominal_subpoint(vector["position_km"], event_date)
-                nominal_collision = radius_km <= 6_420.0
-                st.metric("Distância nominal ao geocentro", f"{radius_km:,.0f} km")
-                figure = go.Figure()
-                figure.add_trace(go.Scattergeo(lat=[latitude], lon=[longitude], mode="markers+text", text=["Subponto nominal JPL"], textposition="top center", marker={"size": 12, "color": "#fb7185" if nominal_collision else "#38bdf8"}, name="Subponto nominal", hovertemplate=f"Lat: {latitude:.3f}°<br>Lon: {longitude:.3f}°<br>Raio nominal: {radius_km:,.0f} km<extra></extra>"))
-                figure.update_layout(template="plotly_dark", height=480, geo={"showland": True, "landcolor": "#172033", "showocean": True, "oceancolor": "#071426", "projection_type": "equirectangular"}, margin=dict(l=0, r=0, t=20, b=0))
-                st.plotly_chart(_apply_plotly_theme(figure), use_container_width=True)
-                if nominal_collision:
-                    st.success(f"A órbita nominal interpolada cruza a esfera atmosférica. Subponto calculado: {latitude:.3f}°, {longitude:.3f}°.")
-                else:
-                    st.info(f"A órbita nominal não cruza a Terra; o marcador é apenas o subponto da direção de aproximação: {latitude:.3f}°, {longitude:.3f}°.")
-            except (requests.RequestException, RuntimeError, ValueError, TypeError) as error:
-                st.warning(f"Não foi possível calcular o subponto nominal pelo Horizons: {error}")
-    st.error("Este mapa não é uma faixa de impacto probabilística.")
-    st.markdown(
-        "O marcador é calculado com o vetor nominal Terra-asteroide do JPL Horizons e a rotação aproximada da Terra. "
-        "O Sentry ainda não fornece a orientação geográfica de cada virtual impactor; portanto, não há como desenhar uma área probabilística real sem a covariância e o vetor específico desse impactor."
-    )
-    st.info(
-        "Para calcular uma faixa geográfica real, o pipeline precisa armazenar a solução do virtual impactor (vetor de estado + covariância), "
-        "propagá-la com JPL Horizons/orekit/poliastro e converter o ponto de entrada para latitude/longitude usando UTC e rotação ITRF da Terra."
-    )
+            with st.container(border=True):
+                st.markdown("#### Geometria nominal")
+                event_date = st.selectbox("Evento virtual para calcular a geometria nominal", event_options)
+                try:
+                    vector = load_horizons_vector(selected, event_date)
+                    latitude, longitude, radius_km = _nominal_subpoint(vector["position_km"], event_date)
+                    nominal_collision = radius_km <= 6_420.0
+                    st.metric("Distância nominal ao geocentro", f"{radius_km:,.0f} km")
 
+                    figure = go.Figure()
+                    figure.add_trace(
+                        go.Scattergeo(
+                            lat=[latitude],
+                            lon=[longitude],
+                            mode="markers+text",
+                            text=["Subponto nominal JPL"],
+                            textposition="top center",
+                            marker={
+                                "size": 12,
+                                "color": "#fb7185" if nominal_collision else "#38bdf8",
+                            },
+                            name="Subponto nominal",
+                            hovertemplate=(
+                                f"Lat: {latitude:.3f}°<br>"
+                                f"Lon: {longitude:.3f}°<br>"
+                                f"Raio nominal: {radius_km:,.0f} km<extra></extra>"
+                            ),
+                        )
+                    )
+                    figure.update_layout(
+                        template="plotly_dark",
+                        height=480,
+                        geo={
+                            "showland": True,
+                            "landcolor": "#172033",
+                            "showocean": True,
+                            "oceancolor": "#071426",
+                            "projection_type": "equirectangular",
+                        },
+                        margin=dict(l=0, r=0, t=20, b=0),
+                    )
+                    st.plotly_chart(_apply_plotly_theme(figure), use_container_width=True)
+                    if nominal_collision:
+                        st.success(
+                            f"A órbita nominal interpolada cruza a esfera atmosférica. "
+                            f"Subponto calculado: {latitude:.3f}°, {longitude:.3f}°."
+                        )
+                    else:
+                        st.info(
+                            f"A órbita nominal não cruza a Terra. Este ponto é apenas a "
+                            f"direção nominal de aproximação: {latitude:.3f}°, {longitude:.3f}°."
+                        )
+                except (KeyError, requests.RequestException, RuntimeError, ValueError, TypeError) as error:
+                    st.warning(f"Não foi possível calcular o subponto nominal pelo Horizons: {error}")
+
+    with st.expander("Como interpretar este mapa", expanded=True):
+        st.warning("O marcador não é uma faixa de impacto probabilística nem representa um local confirmado de colisão.")
+        st.markdown(
+            "Ele usa o vetor nominal Terra-asteroide do JPL Horizons e uma rotação aproximada da Terra. "
+            "O Sentry não fornece, neste painel, a orientação geográfica de cada virtual impactor."
+        )
+        st.info(
+            "Uma faixa geográfica real exige vetor de estado, covariância orbital, propagação da solução "
+            "e conversão para latitude/longitude no referencial ITRF da Terra."
+        )
 
 def render_table(data: pd.DataFrame) -> None:
     st.subheader("📋 Registros monitorados")
@@ -830,7 +934,7 @@ def _render_accessible_theme() -> None:
         [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p, [data-testid="stSidebar"] label { color: #f1f5f9 !important; }
         [data-testid="stMetric"] { background: #101b2d; border: 1px solid #475569; border-radius: 16px; padding: 1rem 1.1rem; box-shadow: 0 12px 30px rgba(0,0,0,.28); }
         [data-testid="stMetricLabel"] { color: #cbd5e1 !important; font-weight: 700; }
-        [data-testid="stMetricValue"] { color: #ffffff !important; font-weight: 800; }
+        [data-testid="stMetricValue"] { color: #ffffff !important; font-size: clamp(1.05rem, 2vw, 1.65rem); font-weight: 800; line-height: 1.2; }
         [data-testid="stMetricDelta"] { color: #a5f3fc !important; }
         [data-testid="stCaptionContainer"] p { color: #cbd5e1 !important; }
         [data-testid="stAlert"] { background: #16243a !important; border: 1px solid #64748b !important; color: #f8fafc !important; border-radius: 12px; }
