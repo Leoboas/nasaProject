@@ -45,3 +45,7 @@ terraform_outputs.json
 .DS_Store
 Thumbs.db
 .idea/
+
+# Exported backup artifacts must never be committed.
+nasa-etl-*.json.gz
+backups/

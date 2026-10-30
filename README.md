@@ -155,6 +155,79 @@ transformações logarítmicas e a proporção diâmetro/velocidade. A detecçã
 triagem estatística reproduzível; avaliações oficiais de impacto continuam
 dependendo dos dados do CNEOS Sentry.
 
+## Bootstrap inicial e backup semanal
+
+Depois de configurar o bucket da **nova conta/projeto** em `S3_BUCKET_NAME`, a
+DAG diária continua coletando uma data por execução. Para popular inicialmente
+os sete dias mais recentes, execute a DAG manual `nasa_bootstrap_7d_dag` uma
+única vez. Ela consulta a NASA de `data final - 6 dias` até a data de execução,
+salva o payload em Bronze e faz UPSERT no PostgreSQL local `postgres`.
+
+```bash
+sudo docker exec nasa-etl-runtime-airflow-scheduler-1 \
+  airflow dags trigger nasa_bootstrap_7d_dag
+sudo docker exec nasa-etl-runtime-airflow-scheduler-1 \
+  airflow dags list-runs -d nasa_bootstrap_7d_dag -o table
+```
+
+A DAG `nasa_weekly_json_backup` roda aos domingos às 03:00 UTC. Ela exporta as
+tabelas `asteroides_monitoria` e `etl_runs` para JSON UTF-8 comprimido em gzip,
+grava primeiro em `s3://<bucket>/<prefix>/backups/` com criptografia SSE-S3 e
+envia o arquivo por SMTP. Se ultrapassar o limite configurado, o e-mail leva um
+link pré-assinado curto em vez de um anexo grande. O bucket continua privado; o
+link deve ser tratado como segredo e pode expirar antes do TTL se a credencial
+temporária da role EC2 expirar. Nesse caso, gere outro link com AWS CLI ou baixe
+o objeto com `aws s3 cp` usando uma sessão autenticada.
+
+Antes de habilitar o envio, configure no arquivo de ambiente protegido da EC2
+(`sudoedit /etc/nasa-etl/nasa-etl.env`) `BACKUP_EMAIL_TO`, `SMTP_HOST`,
+`SMTP_PORT`, `SMTP_FROM`, `SMTP_USERNAME` e `SMTP_PASSWORD`. `SMTP_USERNAME` e
+`SMTP_PASSWORD` devem ser preenchidos juntos. Use senha de aplicativo/credencial
+SMTP dedicada. Depois recrie os containers Airflow para atualizar o ambiente:
+
+```bash
+sudo docker compose --env-file /etc/nasa-etl/nasa-etl.env \
+  -f /opt/nasa-etl/deploy/compose/docker-compose.airflow.ec2.yml \
+  up -d --build --force-recreate
+sudo docker exec nasa-etl-runtime-airflow-scheduler-1 \
+  airflow dags list | grep nasa_weekly_json_backup
+sudo docker exec nasa-etl-runtime-airflow-scheduler-1 \
+  airflow dags trigger nasa_weekly_json_backup
+sudo docker exec nasa-etl-runtime-airflow-scheduler-1 \
+  airflow dags list-runs -d nasa_weekly_json_backup -o table
+```
+
+O trigger manual acima serve para validar envio e acesso ao bucket sem esperar
+o próximo domingo. Consulte a task no Airflow UI ou os logs do scheduler para
+confirmar o e-mail e o URI do objeto.
+
+O código aceita autenticação AWS pela role da EC2 (preferida) ou por credenciais
+temporárias locais. Para a nova conta, crie um bucket privado na região
+selecionada e conceda à role somente `s3:PutObject` e `s3:GetObject` nos prefixos
+`<S3_PREFIX>/*` e `<S3_PREFIX>/backups/*`; não use chaves permanentes no servidor.
+Como não temos acesso ao painel da nova conta neste passo, bucket, role/policy e
+credenciais SMTP são pré-requisitos manuais, não foram criados aqui.
+
+### Restaurar um backup
+
+Copie o `.json.gz` do e-mail ou do S3 para a EC2. O modo padrão apenas valida o
+arquivo; `--apply` faz UPSERT nas mesmas tabelas, sem apagar dados que não
+constem do arquivo:
+
+```bash
+sudo docker cp nasa-etl-20261030T030000Z.json.gz \
+  nasa-etl-runtime-airflow-scheduler-1:/tmp/nasa-etl-backup.json.gz
+sudo docker exec nasa-etl-runtime-airflow-scheduler-1 \
+  python /opt/airflow/scripts/restore_json_backup.py /tmp/nasa-etl-backup.json.gz
+sudo docker exec nasa-etl-runtime-airflow-scheduler-1 \
+  python /opt/airflow/scripts/restore_json_backup.py \
+  /tmp/nasa-etl-backup.json.gz --apply
+```
+
+O container Airflow usa `POSTGRES_HOST=postgres` e compartilha a rede do banco.
+Teste o restore primeiro em um banco descartável; não execute sobre dados
+importantes sem um snapshot/backup anterior.
+
 ## Licença
 
 Consulte [LICENSE](LICENSE).

@@ -44,10 +44,12 @@ def _run_date(context: dict[str, Any]) -> dt.date:
     return logical_date.date() if hasattr(logical_date, "date") else logical_date
 
 
-def _s3_key(run_date: dt.date) -> str:
+def _s3_key(run_date: dt.date, window_days: int = 1) -> str:
     prefix = os.getenv("S3_PREFIX", "bronze").strip("/")
     filename = f"raw_nasa_data_{run_date:%Y%m%d}.json"
-    return f"{prefix}/{filename}" if prefix else filename
+    window_prefix = "bootstrap_7d/" if window_days > 1 else ""
+    key = f"{window_prefix}{filename}"
+    return f"{prefix}/{key}" if prefix else key
 
 
 def _s3_client():
@@ -62,7 +64,7 @@ def _s3_client():
     )
 
 
-def ingest_bronze(**context: Any) -> str:
+def ingest_bronze(window_days: int = 1, **context: Any) -> str:
     """Fetch NASA NEO JSON and persist the exact payload in S3."""
 
     bucket = os.getenv("S3_BUCKET_NAME")
@@ -70,11 +72,14 @@ def ingest_bronze(**context: Any) -> str:
         raise AirflowException("S3_BUCKET_NAME nao configurado")
 
     run_date = _run_date(context)
+    if window_days < 1 or window_days > 7:
+        raise AirflowException("window_days deve estar entre 1 e 7")
+    start_date = run_date - dt.timedelta(days=window_days - 1)
     nasa = get_nasa_config()
     response = requests.get(
         f"{nasa.base_url}/{nasa.resource}",
         params={
-            "start_date": run_date.isoformat(),
+            "start_date": start_date.isoformat(),
             "end_date": run_date.isoformat(),
             "api_key": nasa.api_key,
         },
@@ -86,7 +91,7 @@ def ingest_bronze(**context: Any) -> str:
     except (requests.RequestException, ValueError) as exc:
         raise AirflowException(f"Falha ao consultar a API NASA: {exc}") from exc
 
-    key = _s3_key(run_date)
+    key = _s3_key(run_date, window_days)
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     try:
         _s3_client().put_object(
@@ -95,12 +100,23 @@ def ingest_bronze(**context: Any) -> str:
             Body=body,
             ContentType="application/json",
             ServerSideEncryption="AES256",
-            Metadata={"source": "nasa-neows", "run-date": run_date.isoformat()},
+            Metadata={
+                "source": "nasa-neows",
+                "run-date": run_date.isoformat(),
+                "start-date": start_date.isoformat(),
+            },
         )
     except ClientError as exc:
         raise AirflowException(f"Falha ao gravar Bronze no bucket S3: {exc}") from exc
 
-    LOGGER.info("Bronze salvo em s3://%s/%s (%d bytes)", bucket, key, len(body))
+    LOGGER.info(
+        "Bronze salvo em s3://%s/%s (%d bytes; janela %s a %s)",
+        bucket,
+        key,
+        len(body),
+        start_date,
+        run_date,
+    )
     return f"s3://{bucket}/{key}"
 
 
@@ -231,7 +247,7 @@ def _upsert_dataframe(connection: Any, dataframe: pd.DataFrame) -> int:
     return len(dataframe)
 
 
-def process_silver_gold(**context: Any) -> int:
+def process_silver_gold(window_days: int = 1, **context: Any) -> int:
     """Read Bronze from S3, transform it and upsert Silver/Gold to PostgreSQL."""
 
     bucket = os.getenv("S3_BUCKET_NAME")
@@ -244,7 +260,7 @@ def process_silver_gold(**context: Any) -> int:
     alerts_count = 0
 
     try:
-        key = _s3_key(run_date)
+        key = _s3_key(run_date, window_days)
         response = _s3_client().get_object(Bucket=bucket, Key=key)
         with response["Body"] as body:
             raw = json.loads(body.read().decode("utf-8"))
@@ -301,3 +317,26 @@ with DAG(
     )
 
     bronze >> silver_gold
+
+
+with DAG(
+    dag_id="nasa_bootstrap_7d_dag",
+    default_args=DEFAULT_ARGS,
+    schedule=None,
+    start_date=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
+    catchup=False,
+    max_active_runs=1,
+    tags=["nasa", "bootstrap", "backfill", "s3-bronze"],
+) as bootstrap_dag:
+    bootstrap_bronze = PythonOperator(
+        task_id="ingest_last_7_days_to_s3",
+        python_callable=ingest_bronze,
+        op_kwargs={"window_days": 7},
+    )
+    bootstrap_silver_gold = PythonOperator(
+        task_id="process_last_7_days_to_postgres",
+        python_callable=process_silver_gold,
+        op_kwargs={"window_days": 7},
+    )
+
+    bootstrap_bronze >> bootstrap_silver_gold

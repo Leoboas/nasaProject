@@ -13,5 +13,6 @@ RUN pip install --no-cache-dir \
 COPY --chown=airflow:root airflow/dags /opt/airflow/dags
 COPY --chown=airflow:root airflow/plugins /opt/airflow/plugins
 COPY --chown=airflow:root etl /opt/airflow/etl
+COPY --chown=airflow:root scripts /opt/airflow/scripts
 
 USER airflow
